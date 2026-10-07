@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TypeClash",
+  title: "TypeChaze",
   description: "A minimal, fast typing speed test.",
 };
 

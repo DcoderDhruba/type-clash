@@ -6,7 +6,7 @@ import { TIME_OPTIONS, WORD_OPTIONS, isValidAmount } from "@/lib/config";
 import { getCurrentUser } from "@/server/auth";
 import { getLeaderboard, getRaceRecords } from "@/server/scores";
 
-export const metadata = { title: "Leaderboard | TypeClash" };
+export const metadata = { title: "Leaderboard | TypeChaze" };
 
 type Board = "time" | "words" | "races" | "challenges";
 

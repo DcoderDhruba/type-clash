@@ -20,12 +20,12 @@ export function Navbar({ user }: { user: ClientUser | null }) {
     <nav className="flex w-full items-center justify-between gap-4 px-6 py-4">
       <Link
         href="/"
-        aria-label="TypeClash home"
+        aria-label="TypeChaze home"
         onClick={() => window.dispatchEvent(new Event(RESET_TEST_EVENT))}
       >
         <Image
-          src="/logo.png"
-          alt="TypeClash"
+          src="/typechaze.png"
+          alt="TypeChaze"
           width={2064}
           height={762}
           priority

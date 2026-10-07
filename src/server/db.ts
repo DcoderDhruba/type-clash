@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+﻿import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -90,7 +90,7 @@ CREATE INDEX IF NOT EXISTS test_tickets_user ON test_tickets(user_id, started_at
 
 // Next.js can evaluate this module more than once in dev (hot reload), so the
 // connection lives on globalThis to avoid opening several handles to the file.
-const globalForDb = globalThis as unknown as { __typeclashDb?: DatabaseSync };
+const globalForDb = globalThis as unknown as { __typechazeDb?: DatabaseSync };
 
 /**
  * Brings a database created by an older version up to date. Safe to run repeatedly.
@@ -129,7 +129,7 @@ function migrate(db: DatabaseSync): void {
 }
 
 function open(): DatabaseSync {
-  const file = process.env.DATABASE_PATH ?? path.join(process.cwd(), "data", "typeclash.db");
+  const file = process.env.DATABASE_PATH ?? path.join(process.cwd(), "data", "typechaze.db");
   mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
@@ -142,7 +142,7 @@ function open(): DatabaseSync {
 const migrated = new WeakSet<DatabaseSync>();
 
 export function getDb(): DatabaseSync {
-  const db = (globalForDb.__typeclashDb ??= open());
+  const db = (globalForDb.__typechazeDb ??= open());
   if (!migrated.has(db)) {
     migrate(db);
     migrated.add(db);
@@ -163,3 +163,4 @@ export function transaction<T>(fn: () => T): T {
     throw error;
   }
 }
+

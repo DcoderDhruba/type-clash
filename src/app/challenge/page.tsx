@@ -3,7 +3,7 @@ import { ChallengeForm } from "@/components/ChallengeForm";
 import { isValidAmount } from "@/lib/config";
 import { findUserByUsername, getCurrentUser } from "@/server/auth";
 
-export const metadata = { title: "Challenge | TypeClash" };
+export const metadata = { title: "Challenge | TypeChaze" };
 
 export default async function ChallengePage({
   searchParams,

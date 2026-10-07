@@ -1,4 +1,4 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
 
@@ -23,14 +23,14 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 ## Accounts, leaderboard and races
 
 - **Accounts:** sign up with an email, a public username and a password; log in with either the email or the username. Passwords are hashed with scrypt; sessions are stored in the database and sent as an httpOnly cookie. Emails are stored (lowercased) with an `email_verified` flag that is `0` until verification is built; no email is sent yet, and the email is never shown to other players.
-- **Leaderboard** (`/leaderboard`, opens on the 60-second time board): each player's best score per test type, plus a race win/loss record. The top three places get a 👑 🥈 🥉. Scores are saved automatically when a logged-in user finishes a test, after the server has checked them (see below). Names link to player profiles.
-- **Two match types** (`/challenge`, "Start a match"): a **Challenge** is a 1 vs 1 duel — you share a link, one friend accepts, and it starts by itself a few seconds later. A **Race** is multiplayer: you share a link and create a lobby. Both are typed on the same words at the same time. The leaderboard has a separate tab for each (`challenges` and `races`).
+- **Leaderboard** (`/leaderboard`, opens on the 60-second time board): each player's best score per test type, plus a race win/loss record. The top three places get a ðŸ‘‘ ðŸ¥ˆ ðŸ¥‰. Scores are saved automatically when a logged-in user finishes a test, after the server has checked them (see below). Names link to player profiles.
+- **Two match types** (`/challenge`, "Start a match"): a **Challenge** is a 1 vs 1 duel â€” you share a link, one friend accepts, and it starts by itself a few seconds later. A **Race** is multiplayer: you share a link and create a lobby. Both are typed on the same words at the same time. The leaderboard has a separate tab for each (`challenges` and `races`).
 - **Player profiles** (`/profile/name`): tests taken, average and best WPM, a progress chart for each test type, personal bests, recent tests, and race and challenge records. Anyone can look; the email is never shown.
 - **Challenge a specific person:** from a profile or a leaderboard row, or `/challenge?to=name`. Only that player can accept it. They see it under the bell in the top bar (`/invites`) and can accept or decline; the host is told if it was declined. An unanswered challenge expires after 30 minutes.
 - **Rematch:** the results screen has a **Rematch** button. For a challenge it goes to the other player; for a race it opens a new lobby, and the other players get a "Join rematch" button on their results screen.
 - **Races** (multiplayer): create a race and share its link. Anyone who opens the link and joins is in, up to 8 players. Every player except the host clicks **Ready**; the host can press **Start race** once at least 2 players are in and everyone is ready. After a 5-second countdown everyone types the same words at the same time, and everyone gets a place: higher WPM wins, ties go to accuracy, equal results share a place. Nobody can join after the start, and a player who never reports a result forfeits. Players also get a random funny message and icon based on where they finish, plus a live one during the race. The messages are in `src/lib/funnyMessages.ts`, which is plain data meant to be edited: add a line to any list to add a message.
 
-Data lives in a SQLite file at `data/typeclash.db` (created on first use, git-ignored). It uses Node's built-in `node:sqlite`, so it needs Node 22.5 or newer and prints an "experimental" warning. Set `DATABASE_PATH` to store the file somewhere else. All SQL is in `src/server/`, so moving to another database means changing only that folder.
+Data lives in a SQLite file at `data/typechaze.db` (created on first use, git-ignored). It uses Node's built-in `node:sqlite`, so it needs Node 22.5 or newer and prints an "experimental" warning. Set `DATABASE_PATH` to store the file somewhere else. All SQL is in `src/server/`, so moving to another database means changing only that folder.
 
 Things to know before deploying:
 
@@ -53,3 +53,4 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+

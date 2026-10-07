@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createWordStream, generateWords, newSeed } from "@/lib/words";
@@ -24,7 +24,7 @@ const APPEND_WORD_COUNT = 40;
 const APPEND_THRESHOLD = 15;
 const TICK_MS = 200;
 
-const CONFIG_STORAGE_KEY = "typeclash:config";
+const CONFIG_STORAGE_KEY = "typechaze:config";
 
 /** Reads the last-used settings, ignoring anything missing or no longer valid. */
 function loadSavedConfig(): TypingTestConfig | null {
@@ -310,3 +310,4 @@ export function useTypingTest({ fixed, manualStart = false }: UseTypingTestOptio
 }
 
 export type { Mode };
+
