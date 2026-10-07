@@ -34,7 +34,7 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 The app stores accounts, sessions, scores, tickets, races and race players in MySQL. Copy `.env.example` to `.env.local` and set `MYSQL_PASSWORD` to the password for your Aiven database. The supplied host, port, database name and username are already filled in. `.env.local` is git-ignored; never commit database credentials.
 
-TLS certificate verification is enabled for MySQL connections. Download the CA certificate from the Aiven console and set `MYSQL_SSL_CA` in `.env.local` to the certificate file's path. This is required to verify Aiven's certificate chain; do not disable certificate verification. The app creates its tables automatically when it first connects.
+TLS certificate verification is enabled for MySQL connections. Download the CA certificate from the Aiven console and set `MYSQL_SSL_CA` in `.env.local` to the certificate file's path. In Vercel, set `MYSQL_SSL_CA` to the full PEM certificate contents (including the `BEGIN CERTIFICATE` and `END CERTIFICATE` lines). This is required to verify Aiven's certificate chain; do not disable certificate verification. The app creates its tables automatically when it first connects.
 
 The existing SQLite files in `data/` are left untouched and are not imported. Existing accounts and results in those files will not appear in MySQL; new data is stored in MySQL after the environment variables are configured.
 

@@ -117,13 +117,10 @@ function createPool(): Pool {
     throw new Error("MYSQL_PORT must be a valid TCP port.");
   }
 
-  const caPath = process.env.MYSQL_SSL_CA;
-  if (!caPath) {
-    throw new Error(
-      "Missing MYSQL_SSL_CA. Download the CA certificate for your Aiven service and set MYSQL_SSL_CA to its file path."
-    );
-  }
-  const ca = readFileSync(path.resolve(caPath), "utf8");
+  const caSetting = requiredEnv("MYSQL_SSL_CA");
+  const ca = caSetting.includes("-----BEGIN CERTIFICATE-----")
+    ? caSetting.replace(/\\n/g, "\n")
+    : readFileSync(path.resolve(caSetting), "utf8");
 
   return mysql.createPool({
     host: requiredEnv("MYSQL_HOST"),
