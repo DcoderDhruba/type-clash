@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { getDb, transaction } from "./db";
+import { execute, getDb, queryOne, queryRows, transaction } from "./db";
+import type { RowDataPacket } from "mysql2/promise";
 import { MAX_CHARS_PER_SECOND, MAX_PLAUSIBLE_WPM, wholeNumber } from "./scores";
 import { parseTypedLog, verifyLog } from "./verify";
 import { generateWords } from "@/lib/words";
@@ -34,7 +35,7 @@ const EARLY_FINISH_TOLERANCE_MS = 1500;
 
 const ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 
-interface RaceRow {
+interface RaceRow extends RowDataPacket {
   id: string;
   creator_id: number;
   kind: RaceKind;
@@ -50,7 +51,7 @@ interface RaceRow {
   rematch_id: string | null;
 }
 
-interface PlayerRow {
+interface PlayerRow extends RowDataPacket {
   user_id: number;
   username: string;
   correct_chars: number;
@@ -83,19 +84,23 @@ function makeRaceId(): string {
   return Array.from(bytes, (byte) => ID_ALPHABET[byte % ID_ALPHABET.length]).join("");
 }
 
-function loadRace(id: string): RaceRow | undefined {
-  return getDb().prepare("SELECT * FROM races WHERE id = ?").get(id) as RaceRow | undefined;
+async function loadRace(id: string, forUpdate = false): Promise<RaceRow | undefined> {
+  return queryOne<RaceRow>(
+    getDb(),
+    `SELECT * FROM races WHERE id = ?${forUpdate ? " FOR UPDATE" : ""}`,
+    [id]
+  );
 }
 
-function loadPlayers(raceId: string): PlayerRow[] {
-  return getDb()
-    .prepare(
+async function loadPlayers(raceId: string): Promise<PlayerRow[]> {
+  return queryRows<PlayerRow>(
+    getDb(),
       `SELECT p.*, u.username AS username
          FROM race_players p JOIN users u ON u.id = p.user_id
         WHERE p.race_id = ?
-        ORDER BY p.rowid`
-    )
-    .all(raceId) as unknown as PlayerRow[];
+        ORDER BY p.id`,
+    [raceId]
+  );
 }
 
 function totalChars(words: string[]): number {
@@ -114,7 +119,7 @@ function freshWords(mode: "time" | "words", amount: number): string[] {
 }
 
 /** Inserts a new race with its host as the first player. Must be called inside a transaction. */
-function insertRace(
+async function insertRace(
   id: string,
   creatorId: number,
   kind: RaceKind,
@@ -122,27 +127,32 @@ function insertRace(
   amount: number,
   invitedUserId: number | null,
   words: string[]
-): void {
+): Promise<void> {
   const db = getDb();
+  await queryOne<RowDataPacket & { id: number }>(db, "SELECT id FROM users WHERE id = ? FOR UPDATE", [creatorId]);
   // One open lobby at a time: a new race replaces any the host left unstarted.
-  db.prepare(
-    "UPDATE races SET cancelled = 1 WHERE creator_id = ? AND start_at IS NULL AND cancelled = 0 AND finished_at IS NULL"
-  ).run(creatorId);
-  db.prepare(
+  await execute(
+    db,
+    "UPDATE races SET cancelled = 1 WHERE creator_id = ? AND start_at IS NULL AND cancelled = 0 AND finished_at IS NULL",
+    [creatorId]
+  );
+  await execute(
+    db,
     `INSERT INTO races (id, creator_id, kind, mode, amount, words, invited_user_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, creatorId, kind, mode, amount, JSON.stringify(words), invitedUserId, Date.now());
-  db.prepare("INSERT INTO race_players (race_id, user_id, ready) VALUES (?, ?, 1)").run(id, creatorId);
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, creatorId, kind, mode, amount, JSON.stringify(words), invitedUserId, Date.now()]
+  );
+  await execute(db, "INSERT INTO race_players (race_id, user_id, ready) VALUES (?, ?, 1)", [id, creatorId]);
 }
 
 /** `invitedUserId` makes a challenge (duo) that only that person can accept. */
-export function createRace(
+export async function createRace(
   creatorId: number,
   mode: "time" | "words",
   amount: number,
   kind: RaceKind = "multi",
   invitedUserId?: number
-): string | null {
+): Promise<string | null> {
   if (!isValidAmount(mode, amount)) return null;
 
   const invited = kind === "duo" && invitedUserId !== undefined && invitedUserId !== creatorId ? invitedUserId : null;
@@ -151,10 +161,17 @@ export function createRace(
   for (let attempt = 0; attempt < 5; attempt++) {
     const id = makeRaceId();
     try {
-      transaction(() => insertRace(id, creatorId, kind, mode, amount, invited, words));
+      await transaction(async () => insertRace(id, creatorId, kind, mode, amount, invited, words));
       return id;
-    } catch {
-      // Id collision (extremely unlikely): try another.
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ER_DUP_ENTRY"
+      ) {
+        throw error;
+      }
     }
   }
   return null;
@@ -194,21 +211,23 @@ function decide(race: RaceRow, players: PlayerRow[], now: number): { winnerId: n
 }
 
 /** Must be called inside a transaction. */
-function resolveNow(raceId: string, now: number): void {
-  const race = loadRace(raceId);
+async function resolveNow(raceId: string, now: number): Promise<void> {
+  const race = await loadRace(raceId, true);
   if (!race) return;
-  const outcome = decide(race, loadPlayers(raceId), now);
+  const outcome = decide(race, await loadPlayers(raceId), now);
   if (!outcome) return;
-  getDb()
-    .prepare("UPDATE races SET finished_at = ?, winner_id = ? WHERE id = ? AND finished_at IS NULL")
-    .run(now, outcome.winnerId, raceId);
+  await execute(
+    getDb(),
+    "UPDATE races SET finished_at = ?, winner_id = ? WHERE id = ? AND finished_at IS NULL",
+    [now, outcome.winnerId, raceId]
+  );
 }
 
 /** Settles the race if its time is up, without taking a write lock when nothing changed. */
-function settleIfDue(raceId: string, now: number): void {
-  const race = loadRace(raceId);
-  if (!race || !decide(race, loadPlayers(raceId), now)) return;
-  transaction(() => resolveNow(raceId, now));
+async function settleIfDue(raceId: string, now: number): Promise<void> {
+  const race = await loadRace(raceId);
+  if (!race || !decide(race, await loadPlayers(raceId), now)) return;
+  await transaction(async () => resolveNow(raceId, now));
 }
 
 function phaseOf(race: RaceRow, now: number): RacePhase {
@@ -244,14 +263,18 @@ function playerView(player: PlayerRow, viewerId: number, hostId: number, place: 
   };
 }
 
-export function getRaceView(raceId: string, viewerId: number, options: { includeWords?: boolean } = {}): RaceView | null {
+export async function getRaceView(
+  raceId: string,
+  viewerId: number,
+  options: { includeWords?: boolean } = {}
+): Promise<RaceView | null> {
   const now = Date.now();
-  settleIfDue(raceId, now);
+  await settleIfDue(raceId, now);
 
-  const race = loadRace(raceId);
+  const race = await loadRace(raceId);
   if (!race) return null;
 
-  const rows = loadPlayers(raceId);
+  const rows = await loadPlayers(raceId);
   const phase = phaseOf(race, now);
   const host = rows.find((player) => player.user_id === race.creator_id);
   const isPlayer = rows.some((player) => player.user_id === viewerId);
@@ -284,17 +307,22 @@ export function getRaceView(raceId: string, viewerId: number, options: { include
 
   const wordsVisible = isPlayer && (phase === "countdown" || phase === "running" || phase === "finished");
 
-  const usernameOf = (id: number | null): string | null =>
-    id === null
-      ? null
-      : ((getDb().prepare("SELECT username FROM users WHERE id = ?").get(id) as { username: string } | undefined)
-          ?.username ?? null);
+  const usernameOf = async (id: number | null): Promise<string | null> => {
+    if (id === null) return null;
+    const row = await queryOne<RowDataPacket & { username: string }>(
+      getDb(),
+      "SELECT username FROM users WHERE id = ?",
+      [id]
+    );
+    return row?.username ?? null;
+  };
 
   let rematch: RaceView["rematch"] = null;
   if (isPlayer && phase === "finished" && race.rematch_id) {
-    const next = loadRace(race.rematch_id);
-    if (next && isOpenLobby(next, now)) rematch = { id: next.id, host: usernameOf(next.creator_id) ?? "" };
+    const next = await loadRace(race.rematch_id);
+    if (next && isOpenLobby(next, now)) rematch = { id: next.id, host: (await usernameOf(next.creator_id)) ?? "" };
   }
+  const invitedUsername = await usernameOf(race.invited_user_id);
 
   return {
     id: race.id,
@@ -306,7 +334,7 @@ export function getRaceView(raceId: string, viewerId: number, options: { include
     startAt: race.start_at,
     viewer,
     host: host?.username ?? "",
-    invited: usernameOf(race.invited_user_id),
+    invited: invitedUsername,
     invitedMe: race.invited_user_id === viewerId,
     cancelReason: race.cancelled === 2 ? "declined" : phase === "cancelled" ? "cancelled" : null,
     rematch,
@@ -321,11 +349,11 @@ export function getRaceView(raceId: string, viewerId: number, options: { include
 }
 
 /** Must be called inside a transaction. */
-function joinNow(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  const race = loadRace(raceId);
+async function joinNow(raceId: string, userId: number): Promise<{ error: RaceError } | { ok: true }> {
+  const race = await loadRace(raceId, true);
   if (!race) return { error: "not_found" };
   const now = Date.now();
-  const players = loadPlayers(raceId);
+  const players = await loadPlayers(raceId);
   if (players.some((player) => player.user_id === userId)) return { ok: true };
   if (!isOpenLobby(race, now)) return { error: "closed" };
   // A challenge sent to one person can only be accepted by that person.
@@ -335,27 +363,34 @@ function joinNow(raceId: string, userId: number): { error: RaceError } | { ok: t
   const db = getDb();
   if (race.kind === "duo") {
     // A duel begins by itself a few seconds after the opponent accepts: no Ready, no Start.
-    db.prepare("INSERT INTO race_players (race_id, user_id, ready) VALUES (?, ?, 1)").run(raceId, userId);
-    db.prepare("UPDATE races SET opponent_id = ?, start_at = ? WHERE id = ?").run(userId, now + COUNTDOWN_MS, raceId);
+    await execute(db, "INSERT INTO race_players (race_id, user_id, ready) VALUES (?, ?, 1)", [raceId, userId]);
+    await execute(db, "UPDATE races SET opponent_id = ?, start_at = ? WHERE id = ?", [
+      userId,
+      now + COUNTDOWN_MS,
+      raceId,
+    ]);
   } else {
-    db.prepare("INSERT INTO race_players (race_id, user_id) VALUES (?, ?)").run(raceId, userId);
+    await execute(db, "INSERT INTO race_players (race_id, user_id) VALUES (?, ?)", [raceId, userId]);
   }
   return { ok: true };
 }
 
 /** Anyone with the link can join until the host starts the race (or the invited person, for a challenge). */
-export function joinRace(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  return transaction(() => joinNow(raceId, userId));
+export function joinRace(raceId: string, userId: number): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => joinNow(raceId, userId));
 }
 
 /** The invited player says no. The host is told when they look at the challenge. */
-export function declineRace(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+export function declineRace(
+  raceId: string,
+  userId: number
+): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
     if (race.invited_user_id !== userId) return { error: "forbidden" as const };
     if (!isOpenLobby(race, Date.now())) return { error: "closed" as const };
-    getDb().prepare("UPDATE races SET cancelled = 2 WHERE id = ? AND start_at IS NULL").run(raceId);
+    await execute(getDb(), "UPDATE races SET cancelled = 2 WHERE id = ? AND start_at IS NULL", [raceId]);
     return { ok: true as const };
   });
 }
@@ -369,22 +404,24 @@ export interface PendingInvite {
 }
 
 /** Challenges sent to this player that they have not answered and that are still open. */
-export function getPendingInvites(userId: number, now = Date.now()): PendingInvite[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT r.id AS raceId, u.username AS "from", r.mode AS mode, r.amount AS amount, r.created_at AS createdAt
+export async function getPendingInvites(userId: number, now = Date.now()): Promise<PendingInvite[]> {
+  const rows = await queryRows<
+    RowDataPacket & Omit<PendingInvite, "from"> & { fromUsername: string }
+  >(
+    getDb(),
+      `SELECT r.id AS raceId, u.username AS fromUsername, r.mode AS mode, r.amount AS amount, r.created_at AS createdAt
          FROM races r JOIN users u ON u.id = r.creator_id
         WHERE r.invited_user_id = ? AND r.start_at IS NULL AND r.cancelled = 0
           AND r.finished_at IS NULL AND r.created_at > ?
-        ORDER BY r.created_at DESC`
-    )
-    .all(userId, now - INVITE_EXPIRY_MS) as unknown as PendingInvite[];
+        ORDER BY r.created_at DESC`,
+    [userId, now - INVITE_EXPIRY_MS]
+  );
 
   // Database rows have no prototype, which Next.js will not pass from a server page to a browser
   // component, so hand back plain objects.
   return rows.map((row) => ({
     raceId: row.raceId,
-    from: row.from,
+    from: row.fromUsername,
     mode: row.mode,
     amount: row.amount,
     createdAt: row.createdAt,
@@ -395,19 +432,22 @@ export function getPendingInvites(userId: number, now = Date.now()): PendingInvi
  * Starts a rematch of a finished race, or joins the one a player already started. A rematch of a
  * challenge goes only to the other player; a rematch of a race is an open lobby for everyone.
  */
-export function startRematch(raceId: string, userId: number): { error: RaceError } | { rematchId: string } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+export function startRematch(
+  raceId: string,
+  userId: number
+): Promise<{ error: RaceError } | { rematchId: string }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
-    const players = loadPlayers(raceId);
+    const players = await loadPlayers(raceId);
     if (!players.some((player) => player.user_id === userId)) return { error: "forbidden" as const };
     if (race.finished_at === null) return { error: "closed" as const };
 
     const now = Date.now();
     if (race.rematch_id) {
-      const existing = loadRace(race.rematch_id);
+      const existing = await loadRace(race.rematch_id, true);
       if (existing && isOpenLobby(existing, now)) {
-        const joined = joinNow(existing.id, userId);
+        const joined = await joinNow(existing.id, userId);
         return "error" in joined ? joined : { rematchId: existing.id };
       }
     }
@@ -415,66 +455,74 @@ export function startRematch(raceId: string, userId: number): { error: RaceError
     const other = players.find((player) => player.user_id !== userId);
     const invited = race.kind === "duo" && other ? other.user_id : null;
     const id = makeRaceId();
-    insertRace(id, userId, race.kind, race.mode, race.amount, invited, freshWords(race.mode, race.amount));
-    getDb().prepare("UPDATE races SET rematch_id = ? WHERE id = ?").run(id, raceId);
+    await insertRace(id, userId, race.kind, race.mode, race.amount, invited, freshWords(race.mode, race.amount));
+    await execute(getDb(), "UPDATE races SET rematch_id = ? WHERE id = ?", [id, raceId]);
     return { rematchId: id };
   });
 }
 
 /** A player says whether they are ready to race. The host is always ready. */
-export function setReady(raceId: string, userId: number, ready: boolean): { error: RaceError } | { ok: true } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+export function setReady(
+  raceId: string,
+  userId: number,
+  ready: boolean
+): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
     if (race.kind === "duo") return { error: "forbidden" as const };
-    if (!loadPlayers(raceId).some((player) => player.user_id === userId)) return { error: "forbidden" as const };
+    if (!(await loadPlayers(raceId)).some((player) => player.user_id === userId)) return { error: "forbidden" as const };
     if (!isOpenLobby(race, Date.now())) return { error: "closed" as const };
-    getDb()
-      .prepare("UPDATE race_players SET ready = ? WHERE race_id = ? AND user_id = ?")
-      .run(ready ? 1 : 0, raceId, userId);
+    await execute(getDb(), "UPDATE race_players SET ready = ? WHERE race_id = ? AND user_id = ?", [
+      ready ? 1 : 0,
+      raceId,
+      userId,
+    ]);
     return { ok: true as const };
   });
 }
 
 /** A joined player (not the host) backs out before the race starts. */
-export function leaveRace(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+export function leaveRace(raceId: string, userId: number): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
     if (race.creator_id === userId) return { error: "forbidden" as const };
     if (!isOpenLobby(race, Date.now())) return { error: "closed" as const };
-    getDb().prepare("DELETE FROM race_players WHERE race_id = ? AND user_id = ?").run(raceId, userId);
+    await execute(getDb(), "DELETE FROM race_players WHERE race_id = ? AND user_id = ?", [raceId, userId]);
     return { ok: true as const };
   });
 }
 
 /** The host starts the race, once everyone else in the lobby has clicked Ready. */
-export function startRace(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+export function startRace(raceId: string, userId: number): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
     if (race.creator_id !== userId || race.kind === "duo") return { error: "forbidden" as const };
     const now = Date.now();
     if (!isOpenLobby(race, now)) return { error: "closed" as const };
-    const players = loadPlayers(raceId);
+    const players = await loadPlayers(raceId);
     if (players.length < MIN_PLAYERS) return { error: "need_players" as const };
     if (players.some((player) => player.user_id !== race.creator_id && player.ready !== 1)) {
       return { error: "not_ready" as const };
     }
 
-    getDb().prepare("UPDATE races SET start_at = ? WHERE id = ? AND start_at IS NULL").run(now + COUNTDOWN_MS, raceId);
+    await execute(getDb(), "UPDATE races SET start_at = ? WHERE id = ? AND start_at IS NULL", [now + COUNTDOWN_MS, raceId]);
     return { ok: true as const };
   });
 }
 
 /** The host closes the lobby before the race starts. */
-export function cancelRace(raceId: string, userId: number): { error: RaceError } | { ok: true } {
-  const race = loadRace(raceId);
-  if (!race) return { error: "not_found" };
-  if (race.creator_id !== userId) return { error: "forbidden" };
-  if (race.start_at !== null || race.finished_at !== null) return { error: "closed" };
-  getDb().prepare("UPDATE races SET cancelled = 1 WHERE id = ? AND start_at IS NULL").run(raceId);
-  return { ok: true };
+export function cancelRace(raceId: string, userId: number): Promise<{ error: RaceError } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
+    if (!race) return { error: "not_found" as const };
+    if (race.creator_id !== userId) return { error: "forbidden" as const };
+    if (race.start_at !== null || race.finished_at !== null) return { error: "closed" as const };
+    await execute(getDb(), "UPDATE races SET cancelled = 1 WHERE id = ? AND start_at IS NULL", [raceId]);
+    return { ok: true as const };
+  });
 }
 
 export function parseProgress(body: Record<string, unknown>): RaceProgress | null {
@@ -491,8 +539,8 @@ export function parseFinish(body: Record<string, unknown>): TypedLog | null {
 }
 
 /** Records a player's live progress. Silently ignores anything that is not a running race or not humanly possible. */
-export function reportProgress(raceId: string, userId: number, progress: RaceProgress): void {
-  const race = loadRace(raceId);
+export async function reportProgress(raceId: string, userId: number, progress: RaceProgress): Promise<void> {
+  const race = await loadRace(raceId);
   const now = Date.now();
   if (!race || race.start_at === null || race.finished_at !== null || now < race.start_at) return;
 
@@ -501,13 +549,13 @@ export function reportProgress(raceId: string, userId: number, progress: RacePro
   const ceiling = Math.min(totalChars(words), (elapsedSeconds + 2) * MAX_CHARS_PER_SECOND);
   if (progress.correctChars > ceiling || progress.wordsDone > words.length) return;
 
-  getDb()
-    .prepare(
+  await execute(
+    getDb(),
       `UPDATE race_players
           SET correct_chars = ?, typed_chars = ?, words_done = ?
-        WHERE race_id = ? AND user_id = ? AND finished_at IS NULL`
-    )
-    .run(progress.correctChars, Math.max(progress.typedChars, progress.correctChars), progress.wordsDone, raceId, userId);
+        WHERE race_id = ? AND user_id = ? AND finished_at IS NULL`,
+    [progress.correctChars, Math.max(progress.typedChars, progress.correctChars), progress.wordsDone, raceId, userId]
+  );
 }
 
 /**
@@ -519,11 +567,11 @@ export function finishRace(
   raceId: string,
   userId: number,
   log: TypedLog
-): { error: RaceError; reason?: string } | { ok: true } {
-  return transaction(() => {
-    const race = loadRace(raceId);
+): Promise<{ error: RaceError; reason?: string } | { ok: true }> {
+  return transaction(async () => {
+    const race = await loadRace(raceId, true);
     if (!race) return { error: "not_found" as const };
-    const player = loadPlayers(raceId).find((row) => row.user_id === userId);
+    const player = (await loadPlayers(raceId)).find((row) => row.user_id === userId);
     if (!player) return { error: "forbidden" as const };
     const now = Date.now();
     if (race.start_at === null || now < race.start_at || race.cancelled || race.finished_at !== null) {
@@ -562,15 +610,14 @@ export function finishRace(
       return { error: "invalid" as const, reason: "That speed is not humanly possible." };
     }
 
-    getDb()
-      .prepare(
+    await execute(
+      getDb(),
         `UPDATE race_players
             SET finished_at = ?, wpm = ?, raw_wpm = ?, accuracy = ?,
                 correct = ?, incorrect = ?, extra = ?, missed = ?,
                 correct_chars = ?, typed_chars = ?
-          WHERE race_id = ? AND user_id = ?`
-      )
-      .run(
+          WHERE race_id = ? AND user_id = ?`,
+      [
         now,
         wpm,
         calcRawWpm(typed, elapsedSeconds),
@@ -583,9 +630,10 @@ export function finishRace(
         typed,
         raceId,
         userId
-      );
+      ]
+    );
 
-    resolveNow(raceId, now);
+    await resolveNow(raceId, now);
     return { ok: true as const };
   });
 }

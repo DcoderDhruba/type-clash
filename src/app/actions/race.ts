@@ -18,13 +18,13 @@ export async function createChallenge(formData: FormData): Promise<void> {
   const to = formData.get("to");
   let invitedUserId: number | undefined;
   if (typeof to === "string" && to !== "") {
-    const target = findUserByUsername(to);
+    const target = await findUserByUsername(to);
     if (!target || target.id === user.id) redirect("/challenge");
     invitedUserId = target.id;
   }
   const kind = invitedUserId !== undefined || formData.get("kind") === "duo" ? "duo" : "multi";
 
-  const id = createRace(user.id, mode, amount, kind, invitedUserId);
+  const id = await createRace(user.id, mode, amount, kind, invitedUserId);
   if (!id) redirect("/challenge");
   redirect(`/race/${id}`);
 }

@@ -58,8 +58,8 @@ export default async function LeaderboardPage({
   const amount = !isRecords && isValidAmount(board, requested) ? requested : defaultAmount;
 
   const me = await getCurrentUser();
-  const scoreRows = board === "time" || board === "words" ? getLeaderboard(board, amount) : [];
-  const raceRows = isRecords ? getRaceRecords(board === "challenges" ? "duo" : "multi") : [];
+  const scoreRows = board === "time" || board === "words" ? await getLeaderboard(board, amount) : [];
+  const raceRows = isRecords ? await getRaceRecords(board === "challenges" ? "duo" : "multi") : [];
   const isEmpty = isRecords ? raceRows.length === 0 : scoreRows.length === 0;
 
   return (

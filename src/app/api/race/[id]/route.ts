@@ -50,7 +50,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/race/[id]">)
 
   const { id } = await ctx.params;
   const includeWords = new URL(request.url).searchParams.get("words") === "1";
-  const view = getRaceView(id, user.id, { includeWords });
+  const view = await getRaceView(id, user.id, { includeWords });
   return view ? json(view) : failure("not_found");
 }
 
@@ -66,54 +66,54 @@ export async function POST(request: Request, ctx: RouteContext<"/api/race/[id]">
 
   switch (body.action) {
     case "join": {
-      const result = joinRace(id, user.id);
+      const result = await joinRace(id, user.id);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id, { includeWords: true }));
+      return json(await getRaceView(id, user.id, { includeWords: true }));
     }
     case "decline": {
-      const result = declineRace(id, user.id);
+      const result = await declineRace(id, user.id);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     case "rematch": {
-      const result = startRematch(id, user.id);
+      const result = await startRematch(id, user.id);
       if ("error" in result) return failure(result.error);
       return json({ rematchId: result.rematchId });
     }
     case "leave": {
-      const result = leaveRace(id, user.id);
+      const result = await leaveRace(id, user.id);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     case "ready": {
       if (typeof body.ready !== "boolean") return json({ error: "invalid" }, 400);
-      const result = setReady(id, user.id, body.ready);
+      const result = await setReady(id, user.id, body.ready);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     case "start": {
-      const result = startRace(id, user.id);
+      const result = await startRace(id, user.id);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     case "cancel": {
-      const result = cancelRace(id, user.id);
+      const result = await cancelRace(id, user.id);
       if ("error" in result) return failure(result.error);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     case "progress": {
       const progress = parseProgress(body);
       if (!progress) return json({ error: "invalid" }, 400);
-      reportProgress(id, user.id, progress);
-      const view = getRaceView(id, user.id);
+      await reportProgress(id, user.id, progress);
+      const view = await getRaceView(id, user.id);
       return view ? json(view) : failure("not_found");
     }
     case "finish": {
       const log = parseFinish(body);
       if (!log) return json({ error: "invalid" }, 400);
-      const result = finishRace(id, user.id, log);
+      const result = await finishRace(id, user.id, log);
       if ("error" in result) return failure(result.error, result.reason);
-      return json(getRaceView(id, user.id));
+      return json(await getRaceView(id, user.id));
     }
     default:
       return json({ error: "invalid" }, 400);

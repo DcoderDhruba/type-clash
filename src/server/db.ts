@@ -1,166 +1,216 @@
-﻿import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import mysql from "mysql2/promise";
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
-/**
- * The single place that knows about SQLite. Everything else calls the
- * query helpers in auth.ts / scores.ts / races.ts, so swapping to another
- * database later means changing this file and those.
- */
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS users (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(20) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at BIGINT NOT NULL,
+    email VARCHAR(254) NULL UNIQUE,
+    email_verified TINYINT NOT NULL DEFAULT 0
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token_hash CHAR(64) NOT NULL PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    expires_at BIGINT NOT NULL,
+    KEY sessions_user (user_id),
+    CONSTRAINT sessions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS scores (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    mode VARCHAR(8) NOT NULL,
+    amount INT NOT NULL,
+    wpm INT NOT NULL,
+    raw_wpm INT NOT NULL,
+    accuracy INT NOT NULL,
+    consistency INT NOT NULL,
+    created_at BIGINT NOT NULL,
+    KEY scores_board (mode, amount, wpm),
+    KEY scores_user (user_id, mode, amount),
+    CONSTRAINT scores_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS races (
+    id VARCHAR(8) NOT NULL PRIMARY KEY,
+    creator_id INT UNSIGNED NOT NULL,
+    opponent_id INT UNSIGNED NULL,
+    mode VARCHAR(8) NOT NULL,
+    amount INT NOT NULL,
+    words MEDIUMTEXT NOT NULL,
+    kind VARCHAR(8) NOT NULL DEFAULT 'multi',
+    invited_user_id INT UNSIGNED NULL,
+    rematch_id VARCHAR(8) NULL,
+    created_at BIGINT NOT NULL,
+    start_at BIGINT NULL,
+    finished_at BIGINT NULL,
+    cancelled TINYINT NOT NULL DEFAULT 0,
+    winner_id INT UNSIGNED NULL,
+    KEY races_creator (creator_id),
+    KEY races_opponent (opponent_id),
+    KEY races_invited_user (invited_user_id),
+    KEY races_winner (winner_id),
+    CONSTRAINT races_creator_fk FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT races_opponent_fk FOREIGN KEY (opponent_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT races_invited_user_fk FOREIGN KEY (invited_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT races_winner_fk FOREIGN KEY (winner_id) REFERENCES users(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS race_players (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT UNIQUE,
+    race_id VARCHAR(8) NOT NULL,
+    user_id INT UNSIGNED NOT NULL,
+    ready TINYINT NOT NULL DEFAULT 0,
+    correct_chars INT NOT NULL DEFAULT 0,
+    typed_chars INT NOT NULL DEFAULT 0,
+    words_done INT NOT NULL DEFAULT 0,
+    finished_at BIGINT NULL,
+    wpm INT NULL,
+    raw_wpm INT NULL,
+    accuracy INT NULL,
+    correct INT NULL,
+    incorrect INT NULL,
+    extra INT NULL,
+    missed INT NULL,
+    PRIMARY KEY (race_id, user_id),
+    KEY race_players_order (race_id, id),
+    KEY race_players_user (user_id),
+    CONSTRAINT race_players_race_fk FOREIGN KEY (race_id) REFERENCES races(id) ON DELETE CASCADE,
+    CONSTRAINT race_players_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS test_tickets (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    seed VARCHAR(128) NOT NULL,
+    mode VARCHAR(8) NOT NULL,
+    amount INT NOT NULL,
+    punctuation TINYINT NOT NULL,
+    numbers TINYINT NOT NULL,
+    started_at BIGINT NOT NULL,
+    used TINYINT NOT NULL DEFAULT 0,
+    KEY test_tickets_user (user_id, started_at),
+    CONSTRAINT test_tickets_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+];
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  password_hash TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  email TEXT,
-  email_verified INTEGER NOT NULL DEFAULT 0
-);
+export type DbExecutor = Pool | PoolConnection;
+export type DbValues = Array<string | number | bigint | boolean | Date | null | Buffer | Uint8Array>;
 
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+const transactionContext = new AsyncLocalStorage<PoolConnection>();
 
-CREATE TABLE IF NOT EXISTS scores (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  mode TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  wpm INTEGER NOT NULL,
-  raw_wpm INTEGER NOT NULL,
-  accuracy INTEGER NOT NULL,
-  consistency INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS scores_board ON scores(mode, amount, wpm DESC);
-CREATE INDEX IF NOT EXISTS scores_user ON scores(user_id, mode, amount);
+const globalForDb = globalThis as typeof globalThis & {
+  __typechazeDb?: Pool;
+  __typechazeDbReady?: Promise<void>;
+};
 
-CREATE TABLE IF NOT EXISTS races (
-  id TEXT PRIMARY KEY,
-  creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  opponent_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  mode TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  words TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'multi',
-  invited_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  rematch_id TEXT,
-  created_at INTEGER NOT NULL,
-  start_at INTEGER,
-  finished_at INTEGER,
-  cancelled INTEGER NOT NULL DEFAULT 0,
-  winner_id INTEGER REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS race_players (
-  race_id TEXT NOT NULL REFERENCES races(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  ready INTEGER NOT NULL DEFAULT 0,
-  correct_chars INTEGER NOT NULL DEFAULT 0,
-  typed_chars INTEGER NOT NULL DEFAULT 0,
-  words_done INTEGER NOT NULL DEFAULT 0,
-  finished_at INTEGER,
-  wpm INTEGER,
-  raw_wpm INTEGER,
-  accuracy INTEGER,
-  correct INTEGER,
-  incorrect INTEGER,
-  extra INTEGER,
-  missed INTEGER,
-  PRIMARY KEY (race_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS test_tickets (
-  id TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  seed TEXT NOT NULL,
-  mode TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  punctuation INTEGER NOT NULL,
-  numbers INTEGER NOT NULL,
-  started_at INTEGER NOT NULL,
-  used INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS test_tickets_user ON test_tickets(user_id, started_at);
-`;
-
-// Next.js can evaluate this module more than once in dev (hot reload), so the
-// connection lives on globalThis to avoid opening several handles to the file.
-const globalForDb = globalThis as unknown as { __typechazeDb?: DatabaseSync };
-
-/**
- * Brings a database created by an older version up to date. Safe to run repeatedly.
- * The unique index on email is created here, not in SCHEMA, because it needs the
- * column to exist first (older databases get the column added below).
- */
-function migrate(db: DatabaseSync): void {
-  const userColumns = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
-  if (!userColumns.some((column) => column.name === "email")) {
-    db.exec("ALTER TABLE users ADD COLUMN email TEXT");
-  }
-  if (!userColumns.some((column) => column.name === "email_verified")) {
-    db.exec("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
-  }
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email COLLATE NOCASE)");
-
-  const raceColumns = db.prepare("PRAGMA table_info(races)").all() as { name: string }[];
-  if (!raceColumns.some((column) => column.name === "kind")) {
-    db.exec("ALTER TABLE races ADD COLUMN kind TEXT NOT NULL DEFAULT 'multi'");
-    // Before multiplayer lobbies existed every race was a one-on-one duel, and only duels
-    // ever recorded an opponent, so those rows become duels.
-    db.exec("UPDATE races SET kind = 'duo' WHERE opponent_id IS NOT NULL");
-  }
-
-  if (!raceColumns.some((column) => column.name === "invited_user_id")) {
-    db.exec("ALTER TABLE races ADD COLUMN invited_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
-  }
-  if (!raceColumns.some((column) => column.name === "rematch_id")) {
-    db.exec("ALTER TABLE races ADD COLUMN rematch_id TEXT");
-  }
-
-  const playerColumns = db.prepare("PRAGMA table_info(race_players)").all() as { name: string }[];
-  if (!playerColumns.some((column) => column.name === "ready")) {
-    db.exec("ALTER TABLE race_players ADD COLUMN ready INTEGER NOT NULL DEFAULT 0");
-  }
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
 }
 
-function open(): DatabaseSync {
-  const file = process.env.DATABASE_PATH ?? path.join(process.cwd(), "data", "typechaze.db");
-  mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  db.exec(SCHEMA);
-  return db;
-}
-
-// Checked per module instance (not just per connection) so a hot reload in dev
-// migrates a connection that was opened before the schema changed.
-const migrated = new WeakSet<DatabaseSync>();
-
-export function getDb(): DatabaseSync {
-  const db = (globalForDb.__typechazeDb ??= open());
-  if (!migrated.has(db)) {
-    migrate(db);
-    migrated.add(db);
+function createPool(): Pool {
+  const port = Number(requiredEnv("MYSQL_PORT"));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("MYSQL_PORT must be a valid TCP port.");
   }
-  return db;
+
+  const caPath = process.env.MYSQL_SSL_CA;
+  if (!caPath) {
+    throw new Error(
+      "Missing MYSQL_SSL_CA. Download the CA certificate for your Aiven service and set MYSQL_SSL_CA to its file path."
+    );
+  }
+  const ca = readFileSync(path.resolve(caPath), "utf8");
+
+  return mysql.createPool({
+    host: requiredEnv("MYSQL_HOST"),
+    port,
+    user: requiredEnv("MYSQL_USER"),
+    password: requiredEnv("MYSQL_PASSWORD"),
+    database: requiredEnv("MYSQL_DATABASE"),
+    ssl: { ca, rejectUnauthorized: true },
+    waitForConnections: true,
+    connectionLimit: 10,
+    decimalNumbers: true,
+    supportBigNumbers: true,
+    bigNumberStrings: false,
+  });
 }
 
-/** Runs `fn` inside a write transaction; rolls back if it throws. */
-export function transaction<T>(fn: () => T): T {
-  const db = getDb();
-  db.exec("BEGIN IMMEDIATE");
+function getPool(): Pool {
+  return (globalForDb.__typechazeDb ??= createPool());
+}
+
+export function getDb(): DbExecutor {
+  return transactionContext.getStore() ?? getPool();
+}
+
+async function ensureSchema(): Promise<void> {
+  if (!globalForDb.__typechazeDbReady) {
+    globalForDb.__typechazeDbReady = (async () => {
+      const db = getPool();
+      for (const statement of SCHEMA) await db.query(statement);
+    })().catch((error: unknown) => {
+      globalForDb.__typechazeDbReady = undefined;
+      throw error;
+    });
+  }
+  await globalForDb.__typechazeDbReady;
+}
+
+export async function queryRows<T extends RowDataPacket>(
+  db: DbExecutor,
+  sql: string,
+  values: DbValues = []
+): Promise<T[]> {
+  await ensureSchema();
+  const [rows] = await db.execute<T[]>(sql, values);
+  return rows;
+}
+
+export async function queryOne<T extends RowDataPacket>(
+  db: DbExecutor,
+  sql: string,
+  values: DbValues = []
+): Promise<T | undefined> {
+  const rows = await queryRows<T>(db, sql, values);
+  return rows[0];
+}
+
+export async function execute(
+  db: DbExecutor,
+  sql: string,
+  values: DbValues = []
+): Promise<ResultSetHeader> {
+  await ensureSchema();
+  const [result] = await db.execute<ResultSetHeader>(sql, values);
+  return result;
+}
+
+/** Runs `fn` inside a transaction and rolls it back if it throws. */
+export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
+  await ensureSchema();
+  const db = await getPool().getConnection();
+  let began = false;
   try {
-    const result = fn();
-    db.exec("COMMIT");
+    await db.beginTransaction();
+    began = true;
+    const result = await transactionContext.run(db, fn);
+    await db.commit();
     return result;
   } catch (error) {
-    db.exec("ROLLBACK");
+    if (began) {
+      try {
+        await db.rollback();
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "The database transaction and its rollback both failed.");
+      }
+    }
     throw error;
+  } finally {
+    db.release();
   }
 }
-

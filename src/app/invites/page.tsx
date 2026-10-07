@@ -16,7 +16,7 @@ export default async function InvitesPage() {
         <i className="bi bi-bell-fill" aria-hidden="true" />
         Challenges for you
       </h1>
-      <InviteList initial={getPendingInvites(user.id)} />
+      <InviteList initial={await getPendingInvites(user.id)} />
     </PageShell>
   );
 }

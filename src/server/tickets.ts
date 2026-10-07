@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { getDb } from "./db";
+import { execute, getDb, queryOne } from "./db";
+import type { RowDataPacket } from "mysql2/promise";
 
 /**
  * A ticket is registered when a logged-in player types the first key of a test. It fixes the words
@@ -21,7 +22,7 @@ export interface Ticket {
   startedAt: number;
 }
 
-interface TicketRow {
+interface TicketRow extends RowDataPacket {
   id: string;
   user_id: number;
   seed: string;
@@ -32,38 +33,47 @@ interface TicketRow {
   started_at: number;
 }
 
-export function createTicket(
+export async function createTicket(
   userId: number,
   input: { seed: string; mode: "time" | "words"; amount: number; punctuation: boolean; numbers: boolean }
-): string {
+): Promise<string> {
   const db = getDb();
   const now = Date.now();
 
-  db.prepare("DELETE FROM test_tickets WHERE started_at < ?").run(now - 2 * TICKET_TTL_MS);
+  await execute(db, "DELETE FROM test_tickets WHERE started_at < ?", [now - 2 * TICKET_TTL_MS]);
   // A player never needs many tickets at once; drop the oldest unused ones beyond a handful.
-  db.prepare(
+  await execute(
+    db,
     `DELETE FROM test_tickets WHERE user_id = ? AND used = 0 AND id NOT IN (
-       SELECT id FROM test_tickets WHERE user_id = ? AND used = 0 ORDER BY started_at DESC LIMIT ?
-     )`
-  ).run(userId, userId, MAX_OPEN_TICKETS - 1);
+       SELECT id FROM (
+         SELECT id FROM test_tickets WHERE user_id = ? AND used = 0 ORDER BY started_at DESC LIMIT ?
+       ) AS retained_tickets
+     )`,
+    [userId, userId, MAX_OPEN_TICKETS - 1]
+  );
 
   const id = randomBytes(16).toString("base64url");
-  db.prepare(
+  await execute(
+    db,
     `INSERT INTO test_tickets (id, user_id, seed, mode, amount, punctuation, numbers, started_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, userId, input.seed, input.mode, input.amount, input.punctuation ? 1 : 0, input.numbers ? 1 : 0, now);
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, userId, input.seed, input.mode, input.amount, input.punctuation ? 1 : 0, input.numbers ? 1 : 0, now]
+  );
   return id;
 }
 
 /** Marks the ticket as used and returns it, or null if it is unknown, someone else's, used or too old. */
-export function consumeTicket(id: string, userId: number, now = Date.now()): Ticket | null {
+export async function consumeTicket(id: string, userId: number, now = Date.now()): Promise<Ticket | null> {
   const db = getDb();
-  const claimed = db
-    .prepare("UPDATE test_tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND started_at > ?")
-    .run(id, userId, now - TICKET_TTL_MS);
-  if (claimed.changes !== 1) return null;
+  const claimed = await execute(
+    db,
+    "UPDATE test_tickets SET used = 1 WHERE id = ? AND user_id = ? AND used = 0 AND started_at > ?",
+    [id, userId, now - TICKET_TTL_MS]
+  );
+  if (claimed.affectedRows !== 1) return null;
 
-  const row = db.prepare("SELECT * FROM test_tickets WHERE id = ?").get(id) as unknown as TicketRow;
+  const row = await queryOne<TicketRow>(db, "SELECT * FROM test_tickets WHERE id = ?", [id]);
+  if (!row) throw new Error("Claimed test ticket was not found.");
   return {
     id: row.id,
     userId: row.user_id,

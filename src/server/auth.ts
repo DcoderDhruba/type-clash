@@ -2,7 +2,8 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { promisify } from "node:util";
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { getDb } from "./db";
+import { execute, getDb, queryOne } from "./db";
+import type { RowDataPacket } from "mysql2/promise";
 
 const scrypt = promisify(scryptCallback) as (
   password: string,
@@ -64,12 +65,12 @@ export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
 
-  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
+  await execute(db, "DELETE FROM sessions WHERE expires_at < ?", [Date.now()]);
+  await execute(db, "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)", [
     hashToken(token),
     userId,
     expiresAt
-  );
+  ]);
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -84,7 +85,7 @@ export async function createSession(userId: number): Promise<void> {
 export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (token) getDb().prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+  if (token) await execute(getDb(), "DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
   cookieStore.delete(SESSION_COOKIE);
 }
 
@@ -94,21 +95,23 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const row = getDb()
-    .prepare(
+  const row = await queryOne<RowDataPacket & { id: number; username: string }>(
+    getDb(),
       `SELECT u.id AS id, u.username AS username
          FROM sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = ? AND s.expires_at > ?`
-    )
-    .get(hashToken(token), Date.now()) as { id: number; username: string } | undefined;
+        WHERE s.token_hash = ? AND s.expires_at > ?`,
+    [hashToken(token), Date.now()]
+  );
 
   return row ? { id: row.id, username: row.username } : null;
 });
 
-export function findUserByUsername(username: string): SessionUser | null {
-  const row = getDb().prepare("SELECT id, username FROM users WHERE username = ?").get(username) as
-    | { id: number; username: string }
-    | undefined;
+export async function findUserByUsername(username: string): Promise<SessionUser | null> {
+  const row = await queryOne<RowDataPacket & SessionUser>(
+    getDb(),
+    "SELECT id, username FROM users WHERE username = ?",
+    [username]
+  );
   return row ? { id: row.id, username: row.username } : null;
 }
 

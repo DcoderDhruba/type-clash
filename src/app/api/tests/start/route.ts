@@ -27,5 +27,5 @@ export async function POST(request: Request) {
     return json({ error: "Invalid test" }, 400);
   }
 
-  return json({ ticketId: createTicket(user.id, { seed, mode, amount, punctuation, numbers }) });
+  return json({ ticketId: await createTicket(user.id, { seed, mode, amount, punctuation, numbers }) });
 }

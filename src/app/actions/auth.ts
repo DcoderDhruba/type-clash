@@ -1,7 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { getDb } from "@/server/db";
+import { execute, getDb, queryOne } from "@/server/db";
+import type { RowDataPacket } from "mysql2/promise";
 import {
   PASSWORD_MAX,
   PASSWORD_MIN,
@@ -46,29 +47,34 @@ export async function signup(_prev: AuthFormState | undefined, formData: FormDat
   }
 
   const db = getDb();
-  const taken = (): AuthFormState | null => {
-    if (db.prepare("SELECT 1 FROM users WHERE email = ? COLLATE NOCASE").get(email)) {
+  const taken = async (): Promise<AuthFormState | null> => {
+    if (await queryOne<RowDataPacket>(db, "SELECT 1 FROM users WHERE email = ?", [email])) {
       return { field: "email", error: "An account with this email already exists. Try logging in." };
     }
-    if (db.prepare("SELECT 1 FROM users WHERE username = ?").get(username)) {
+    if (await queryOne<RowDataPacket>(db, "SELECT 1 FROM users WHERE username = ?", [username])) {
       return { field: "username", error: "That username is already taken." };
     }
     return null;
   };
 
-  const conflict = taken();
+  const conflict = await taken();
   if (conflict) return conflict;
 
   let userId: number;
   try {
     // email_verified stays 0 until a verification email is sent and confirmed.
-    const result = db
-      .prepare("INSERT INTO users (username, password_hash, created_at, email, email_verified) VALUES (?, ?, ?, ?, 0)")
-      .run(username, await hashPassword(password), Date.now(), email);
-    userId = Number(result.lastInsertRowid);
-  } catch {
+    const result = await execute(
+      db,
+      "INSERT INTO users (username, password_hash, created_at, email, email_verified) VALUES (?, ?, ?, ?, 0)",
+      [username, await hashPassword(password), Date.now(), email]
+    );
+    userId = result.insertId;
+  } catch (error) {
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ER_DUP_ENTRY") {
+      throw error;
+    }
     // Lost a race with another signup for the same email or username.
-    return taken() ?? { error: "Could not create the account. Try again." };
+    return (await taken()) ?? { error: "Could not create the account. Try again." };
   }
 
   await createSession(userId);
@@ -88,13 +94,13 @@ export async function login(_prev: AuthFormState | undefined, formData: FormData
   // Usernames cannot contain "@", so an "@" means the person typed an email address.
   const db = getDb();
   const email = identifier.includes("@") ? normalizeEmail(identifier) : null;
-  const user = (
-    identifier.includes("@")
-      ? email
-        ? db.prepare("SELECT id, password_hash FROM users WHERE email = ? COLLATE NOCASE").get(email)
-        : undefined
-      : db.prepare("SELECT id, password_hash FROM users WHERE username = ?").get(identifier)
-  ) as { id: number; password_hash: string } | undefined;
+  const user = email || !identifier.includes("@")
+    ? await queryOne<RowDataPacket & { id: number; password_hash: string }>(
+        db,
+        identifier.includes("@") ? "SELECT id, password_hash FROM users WHERE email = ?" : "SELECT id, password_hash FROM users WHERE username = ?",
+        [identifier.includes("@") ? email : identifier]
+      )
+    : undefined;
 
   const valid = user ? await verifyPassword(password, user.password_hash) : await verifyAgainstDummy(password);
   if (!user || !valid) {

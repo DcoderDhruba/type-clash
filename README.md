@@ -30,11 +30,17 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 - **Rematch:** the results screen has a **Rematch** button. For a challenge it goes to the other player; for a race it opens a new lobby, and the other players get a "Join rematch" button on their results screen.
 - **Races** (multiplayer): create a race and share its link. Anyone who opens the link and joins is in, up to 8 players. Every player except the host clicks **Ready**; the host can press **Start race** once at least 2 players are in and everyone is ready. After a 5-second countdown everyone types the same words at the same time, and everyone gets a place: higher WPM wins, ties go to accuracy, equal results share a place. Nobody can join after the start, and a player who never reports a result forfeits. Players also get a random funny message and icon based on where they finish, plus a live one during the race. The messages are in `src/lib/funnyMessages.ts`, which is plain data meant to be edited: add a line to any list to add a message.
 
-Data lives in a SQLite file at `data/typechaze.db` (created on first use, git-ignored). It uses Node's built-in `node:sqlite`, so it needs Node 22.5 or newer and prints an "experimental" warning. Set `DATABASE_PATH` to store the file somewhere else. All SQL is in `src/server/`, so moving to another database means changing only that folder.
+## MySQL setup
+
+The app stores accounts, sessions, scores, tickets, races and race players in MySQL. Copy `.env.example` to `.env.local` and set `MYSQL_PASSWORD` to the password for your Aiven database. The supplied host, port, database name and username are already filled in. `.env.local` is git-ignored; never commit database credentials.
+
+TLS certificate verification is enabled for MySQL connections. Download the CA certificate from the Aiven console and set `MYSQL_SSL_CA` in `.env.local` to the certificate file's path. This is required to verify Aiven's certificate chain; do not disable certificate verification. The app creates its tables automatically when it first connects.
+
+The existing SQLite files in `data/` are left untouched and are not imported. Existing accounts and results in those files will not appear in MySQL; new data is stored in MySQL after the environment variables are configured.
 
 Things to know before deploying:
 
-- SQLite needs a persistent disk. It will not work on serverless hosts such as Vercel without swapping the database.
+- Set all five `MYSQL_*` connection variables in the deployment environment. Keep the password and any CA certificate out of source control.
 - Race state is in the database, but login throttling is in memory, so it is per server process.
 - **Score checking.** A logged-in player's test is registered with the server at the first key (a one-time "ticket" that records the test's random seed and the server's clock). The words come from that seed, so the server can rebuild them itself. At the end the browser sends the full typing log (every word and when each key was pressed) and the server recounts the score from it, ignoring any number the browser claims. It rejects logs that were pasted, faster than a person can press keys, too regular to be a person, or that do not match how long the test really took. Race results are checked the same way against the race's own words and start time.
 - **What this cannot stop.** A program that types the right words at a believable speed with human-like timing will still pass; nothing running in a browser can fully prevent that. The limits are in `src/server/verify.ts` if you want to tighten or loosen them.
@@ -53,4 +59,3 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-

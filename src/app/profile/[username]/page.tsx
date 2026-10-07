@@ -69,7 +69,7 @@ export default async function ProfilePage({
   const { username } = await params;
   const query = await searchParams;
 
-  const profile = getProfile(username);
+  const profile = await getProfile(username);
   if (!profile) notFound();
 
   const me = await getCurrentUser();
@@ -83,7 +83,7 @@ export default async function ProfilePage({
     : undefined;
   const selected =
     requested ?? profile.bests.find((best) => best.mode === "time" && best.amount === 60) ?? profile.bests[0];
-  const history = selected ? getScoreHistory(profile.id, selected.mode, selected.amount) : [];
+  const history = selected ? await getScoreHistory(profile.id, selected.mode, selected.amount) : [];
   const bestWpm = profile.bests.length > 0 ? Math.max(...profile.bests.map((best) => best.wpm)) : null;
 
   return (

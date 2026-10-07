@@ -1,6 +1,7 @@
-import { getDb } from "./db";
+import { getDb, queryOne, queryRows } from "./db";
 import { getPlayerRaceRecord } from "./scores";
 import type { RaceRecord } from "./scores";
+import type { RowDataPacket } from "mysql2/promise";
 
 export interface BestScore {
   mode: "time" | "words";
@@ -38,33 +39,42 @@ export interface Profile {
 }
 
 /** Everything shown on a public profile. Never includes the email. */
-export function getProfile(username: string): Profile | null {
+export async function getProfile(username: string): Promise<Profile | null> {
   const db = getDb();
-  const user = db.prepare("SELECT id, username, created_at AS createdAt FROM users WHERE username = ?").get(username) as
-    | { id: number; username: string; createdAt: number }
-    | undefined;
+  const user = await queryOne<RowDataPacket & { id: number; username: string; createdAt: number }>(
+    db,
+    "SELECT id, username, created_at AS createdAt FROM users WHERE username = ?",
+    [username]
+  );
   if (!user) return null;
 
-  const totals = db
-    .prepare("SELECT COUNT(*) AS tests, AVG(wpm) AS avgWpm, AVG(accuracy) AS avgAccuracy FROM scores WHERE user_id = ?")
-    .get(user.id) as { tests: number; avgWpm: number | null; avgAccuracy: number | null };
+  const totals = await queryOne<RowDataPacket & { tests: number; avgWpm: number | null; avgAccuracy: number | null }>(
+    db,
+    "SELECT COUNT(*) AS tests, AVG(wpm) AS avgWpm, AVG(accuracy) AS avgAccuracy FROM scores WHERE user_id = ?",
+    [user.id]
+  );
+  if (!totals) throw new Error("Could not calculate the player's profile totals.");
 
-  const bests = db
-    .prepare(
+  const bests = await queryRows<BestScore & RowDataPacket>(
+    db,
       `SELECT mode, amount, wpm, accuracy, created_at AS createdAt FROM (
          SELECT mode, amount, wpm, accuracy, created_at,
                 ROW_NUMBER() OVER (PARTITION BY mode, amount ORDER BY wpm DESC, accuracy DESC, created_at ASC) AS rn
            FROM scores WHERE user_id = ?
-       ) WHERE rn = 1
-       ORDER BY wpm DESC`
-    )
-    .all(user.id) as unknown as BestScore[];
+       ) AS user_scores WHERE rn = 1
+       ORDER BY wpm DESC`,
+    [user.id]
+  );
 
-  const recent = db
-    .prepare(
-      "SELECT mode, amount, wpm, accuracy, created_at AS createdAt FROM scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 8"
-    )
-    .all(user.id) as unknown as RecentScore[];
+  const recent = await queryRows<RecentScore & RowDataPacket>(
+    db,
+    "SELECT mode, amount, wpm, accuracy, created_at AS createdAt FROM scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 8",
+    [user.id]
+  );
+  const [races, challenges] = await Promise.all([
+    getPlayerRaceRecord(user.username, "multi"),
+    getPlayerRaceRecord(user.username, "duo"),
+  ]);
 
   return {
     id: user.id,
@@ -75,17 +85,22 @@ export function getProfile(username: string): Profile | null {
     averageAccuracy: totals.avgAccuracy === null ? null : Math.round(totals.avgAccuracy),
     bests,
     recent,
-    races: getPlayerRaceRecord(user.username, "multi"),
-    challenges: getPlayerRaceRecord(user.username, "duo"),
+    races,
+    challenges,
   };
 }
 
 /** A player's last results for one test type, oldest first, for the progress chart. */
-export function getScoreHistory(userId: number, mode: "time" | "words", amount: number, limit = 50): HistoryPoint[] {
-  const rows = getDb()
-    .prepare(
-      "SELECT wpm, created_at AS createdAt FROM scores WHERE user_id = ? AND mode = ? AND amount = ? ORDER BY created_at DESC LIMIT ?"
-    )
-    .all(userId, mode, amount, limit) as unknown as HistoryPoint[];
+export async function getScoreHistory(
+  userId: number,
+  mode: "time" | "words",
+  amount: number,
+  limit = 50
+): Promise<HistoryPoint[]> {
+  const rows = await queryRows<HistoryPoint & RowDataPacket>(
+    getDb(),
+    "SELECT wpm, created_at AS createdAt FROM scores WHERE user_id = ? AND mode = ? AND amount = ? ORDER BY created_at DESC LIMIT ?",
+    [userId, mode, amount, limit]
+  );
   return rows.reverse();
 }

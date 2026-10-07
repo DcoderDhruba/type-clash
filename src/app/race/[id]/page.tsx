@@ -11,7 +11,7 @@ export default async function RacePage({ params }: { params: Promise<{ id: strin
   const user = await getCurrentUser();
   if (!user) redirect(`/login?next=${encodeURIComponent(`/race/${id}`)}`);
 
-  const view = getRaceView(id, user.id, { includeWords: true });
+  const view = await getRaceView(id, user.id, { includeWords: true });
   if (!view) notFound();
 
   return <RaceRoom initial={view} />;

@@ -19,7 +19,7 @@ export default async function ChallengePage({
 
   // ?to=name means "challenge this particular player".
   const toParam = typeof params.to === "string" ? params.to : "";
-  const target = user && toParam ? findUserByUsername(toParam) : null;
+  const target = user && toParam ? await findUserByUsername(toParam) : null;
   const invitee = target && target.id !== user?.id ? target.username : null;
   const inviteeProblem =
     user && toParam && !invitee

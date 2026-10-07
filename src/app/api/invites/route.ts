@@ -6,5 +6,5 @@ import { getPendingInvites } from "@/server/races";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return json({ error: "unauthorized" }, 401);
-  return json({ invites: getPendingInvites(user.id) });
+  return json({ invites: await getPendingInvites(user.id) });
 }

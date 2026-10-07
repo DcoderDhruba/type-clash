@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const submission = parseScoreSubmission(await request.json().catch(() => null));
   if (!submission) return json({ error: "Invalid score" }, 400);
 
-  const result = submitVerifiedScore(user.id, submission);
+  const result = await submitVerifiedScore(user.id, submission);
   if (!result.ok) return json({ error: "Score rejected", reason: result.reason }, result.status);
 
   return json(result.saved);

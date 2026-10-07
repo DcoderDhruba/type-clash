@@ -1,4 +1,5 @@
-import { getDb } from "./db";
+import { execute, getDb, queryOne, queryRows } from "./db";
+import type { RowDataPacket } from "mysql2/promise";
 import { consumeTicket } from "./tickets";
 import { parseTypedLog, verifyLog } from "./verify";
 import { calcAccuracy, calcRawWpm, calcWpm } from "@/lib/scoring";
@@ -21,7 +22,7 @@ export interface SavedScore {
   isPersonalBest: boolean;
 }
 
-export interface LeaderboardRow {
+export interface LeaderboardRow extends RowDataPacket {
   rank: number;
   username: string;
   wpm: number;
@@ -67,8 +68,12 @@ const fail = (status: number, reason: string): SubmitResult => ({ ok: false, sta
  * browser), the score is recounted from the typing log, and the log has to look like a person typing
  * for as long as the server saw the test take. The browser's own numbers are never used.
  */
-export function submitVerifiedScore(userId: number, submission: ScoreSubmission, now = Date.now()): SubmitResult {
-  const ticket = consumeTicket(submission.ticketId, userId, now);
+export async function submitVerifiedScore(
+  userId: number,
+  submission: ScoreSubmission,
+  now = Date.now()
+): Promise<SubmitResult> {
+  const ticket = await consumeTicket(submission.ticketId, userId, now);
   if (!ticket) return fail(400, "This test was not registered, was already submitted, or has expired.");
 
   const { log } = submission;
@@ -104,24 +109,30 @@ export function submitVerifiedScore(userId: number, submission: ScoreSubmission,
   const rawWpm = calcRawWpm(typed, elapsed);
   const db = getDb();
 
-  const previousBest = db
-    .prepare("SELECT MAX(wpm) AS best FROM scores WHERE user_id = ? AND mode = ? AND amount = ?")
-    .get(userId, ticket.mode, ticket.amount) as { best: number | null };
+  const previousBest = await queryOne<RowDataPacket & { best: number | null }>(
+    db,
+    "SELECT MAX(wpm) AS best FROM scores WHERE user_id = ? AND mode = ? AND amount = ?",
+    [userId, ticket.mode, ticket.amount]
+  );
+  if (!previousBest) throw new Error("Could not read the player's previous best score.");
 
-  db.prepare(
+  await execute(
+    db,
     `INSERT INTO scores (user_id, mode, amount, wpm, raw_wpm, accuracy, consistency, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(userId, ticket.mode, ticket.amount, wpm, rawWpm, accuracy, submission.consistency, now);
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [userId, ticket.mode, ticket.amount, wpm, rawWpm, accuracy, submission.consistency, now]
+  );
 
   const best = Math.max(wpm, previousBest.best ?? 0);
-  const ahead = db
-    .prepare(
+  const ahead = await queryOne<RowDataPacket & { n: number }>(
+    db,
       `SELECT COUNT(*) AS n FROM (
          SELECT user_id, MAX(wpm) AS best FROM scores
           WHERE mode = ? AND amount = ? GROUP BY user_id
-       ) WHERE best > ?`
-    )
-    .get(ticket.mode, ticket.amount, best) as { n: number };
+       ) AS score_bests WHERE best > ?`,
+    [ticket.mode, ticket.amount, best]
+  );
+  if (!ahead) throw new Error("Could not calculate the leaderboard rank.");
 
   return {
     ok: true,
@@ -130,9 +141,13 @@ export function submitVerifiedScore(userId: number, submission: ScoreSubmission,
 }
 
 /** Each player's single best result for this test type, fastest first. */
-export function getLeaderboard(mode: "time" | "words", amount: number, limit = 50): LeaderboardRow[] {
-  const rows = getDb()
-    .prepare(
+export async function getLeaderboard(
+  mode: "time" | "words",
+  amount: number,
+  limit = 50
+): Promise<LeaderboardRow[]> {
+  const rows = await queryRows<LeaderboardRow>(
+    getDb(),
       `SELECT username, wpm, accuracy, consistency, created_at AS createdAt FROM (
          SELECT u.username AS username, s.wpm AS wpm, s.accuracy AS accuracy,
                 s.consistency AS consistency, s.created_at AS created_at,
@@ -142,12 +157,12 @@ export function getLeaderboard(mode: "time" | "words", amount: number, limit = 5
                 ) AS rn
            FROM scores s JOIN users u ON u.id = s.user_id
           WHERE s.mode = ? AND s.amount = ?
-       )
+       ) AS player_scores
        WHERE rn = 1
        ORDER BY wpm DESC, accuracy DESC, created_at ASC
-       LIMIT ?`
-    )
-    .all(mode, amount, limit) as unknown as Omit<LeaderboardRow, "rank">[];
+       LIMIT ?`,
+    [mode, amount, limit]
+  );
 
   return rows.map((row, index) => ({ ...row, rank: index + 1 }));
 }
@@ -157,24 +172,26 @@ export function getLeaderboard(mode: "time" | "words", amount: number, limit = 5
  * first together with someone else is a draw, and anything else in a real race is a loss.
  * Races where nobody typed anything are ignored.
  */
-function raceRecordMap(kind: "duo" | "multi"): Map<string, { wins: number; losses: number; draws: number }> {
-  const rows = getDb()
-    .prepare(
+async function raceRecordMap(kind: "duo" | "multi"): Promise<Map<string, { wins: number; losses: number; draws: number }>> {
+  const rows = await queryRows<
+    RowDataPacket & {
+      raceId: string;
+      username: string;
+      finishedAt: number | null;
+      wpm: number | null;
+      accuracy: number | null;
+    }
+  >(
+    getDb(),
       `SELECT p.race_id AS raceId, u.username AS username, p.finished_at AS finishedAt,
               p.wpm AS wpm, p.accuracy AS accuracy
          FROM race_players p
          JOIN races r ON r.id = p.race_id
          JOIN users u ON u.id = p.user_id
         WHERE r.finished_at IS NOT NULL AND r.cancelled = 0 AND r.start_at IS NOT NULL AND r.kind = ?
-        ORDER BY p.race_id, p.rowid`
-    )
-    .all(kind) as unknown as {
-    raceId: string;
-    username: string;
-    finishedAt: number | null;
-    wpm: number | null;
-    accuracy: number | null;
-  }[];
+        ORDER BY p.race_id, p.id`,
+    [kind]
+  );
 
   const byRace = new Map<string, typeof rows>();
   for (const row of rows) byRace.set(row.raceId, [...(byRace.get(row.raceId) ?? []), row]);
@@ -205,12 +222,12 @@ export interface RaceRecord {
 }
 
 /** One player's record in duels ("duo") or multiplayer races ("multi"). */
-export function getPlayerRaceRecord(username: string, kind: "duo" | "multi"): RaceRecord {
-  return raceRecordMap(kind).get(username) ?? { wins: 0, losses: 0, draws: 0 };
+export async function getPlayerRaceRecord(username: string, kind: "duo" | "multi"): Promise<RaceRecord> {
+  return (await raceRecordMap(kind)).get(username) ?? { wins: 0, losses: 0, draws: 0 };
 }
 
-export function getRaceRecords(kind: "duo" | "multi", limit = 50): RaceRecordRow[] {
-  const records = raceRecordMap(kind);
+export async function getRaceRecords(kind: "duo" | "multi", limit = 50): Promise<RaceRecordRow[]> {
+  const records = await raceRecordMap(kind);
 
   const sorted = [...records.entries()]
     .map(([username, record]) => ({ username, ...record }))
