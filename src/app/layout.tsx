@@ -6,6 +6,7 @@ import { Navbar } from "@/components/Navbar";
 import { UserProvider } from "@/components/UserProvider";
 import { getCurrentUser } from "@/server/auth";
 import { siteUrl } from "@/lib/site";
+import { Analytics } from "@vercel/analytics/next"
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -51,6 +52,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <Analytics />
       <body
         className="flex h-dvh flex-col overflow-y-auto bg-bg text-text"
         suppressHydrationWarning
