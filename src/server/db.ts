@@ -105,19 +105,14 @@ function requiredEnv(name: string): string {
 }
 
 function createPool(): Pool {
-  const caSetting = process.env.PGSSLROOTCERT;
-  const ssl = caSetting
-    ? {
-        ca: caSetting.includes("-----BEGIN CERTIFICATE-----")
-          ? caSetting.replace(/\\n/g, "\n")
-          : readFileSync(path.resolve(caSetting), "utf8"),
-        rejectUnauthorized: true,
-      }
-    : { rejectUnauthorized: true };
+  const caSetting = requiredEnv("PGSSLROOTCERT");
+  const ca = caSetting.includes("-----BEGIN CERTIFICATE-----")
+    ? caSetting.replace(/\\n/g, "\n")
+    : readFileSync(path.resolve(caSetting), "utf8");
 
   return new Pool({
     connectionString: requiredEnv("DATABASE_URL"),
-    ssl,
+    ssl: { ca, rejectUnauthorized: true },
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,

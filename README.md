@@ -34,7 +34,7 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 The app stores accounts, sessions, scores, tickets, races and race players in Supabase Postgres. Copy `.env.example` to `.env.local` and set `DATABASE_URL` to the PostgreSQL connection string from Supabase **Project Settings → Database → Connection string**. Use the **Transaction pooler** connection string for Vercel deployments, especially when direct database connections are unavailable over IPv6. `.env.local` is git-ignored; never commit a database connection string or password.
 
-TLS certificate verification is enabled. Supabase's normal connection string uses TLS with the system certificate store. If your project requires its root certificate, set `PGSSLROOTCERT` to the CA certificate path locally or its full PEM contents in Vercel. Do not disable certificate verification. The app creates the required tables and indexes automatically when it first connects; the Supabase database user must have permission to create them.
+TLS certificate verification is enabled and `PGSSLROOTCERT` is required. Download the database root CA from Supabase **Database Settings → SSL Configuration**; set `PGSSLROOTCERT` to the CA certificate path locally and its full PEM contents in Vercel. Do not use the old Aiven CA certificate or disable certificate verification. The app creates the required tables and indexes automatically when it first connects; the Supabase database user must have permission to create them.
 
 The previous MySQL and SQLite databases are left untouched and are not imported. Existing accounts and results in those databases will not appear in Supabase; new data is stored in Postgres once `DATABASE_URL` is configured.
 
