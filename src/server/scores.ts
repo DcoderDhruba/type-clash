@@ -1,5 +1,5 @@
 import { execute, getDb, queryOne, queryRows } from "./db";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 import { consumeTicket } from "./tickets";
 import { parseTypedLog, verifyLog } from "./verify";
 import { calcAccuracy, calcRawWpm, calcWpm } from "@/lib/scoring";
@@ -22,7 +22,7 @@ export interface SavedScore {
   isPersonalBest: boolean;
 }
 
-export interface LeaderboardRow extends RowDataPacket {
+export interface LeaderboardRow extends QueryResultRow {
   rank: number;
   username: string;
   wpm: number;
@@ -109,7 +109,7 @@ export async function submitVerifiedScore(
   const rawWpm = calcRawWpm(typed, elapsed);
   const db = getDb();
 
-  const previousBest = await queryOne<RowDataPacket & { best: number | null }>(
+  const previousBest = await queryOne<QueryResultRow & { best: number | null }>(
     db,
     "SELECT MAX(wpm) AS best FROM scores WHERE user_id = ? AND mode = ? AND amount = ?",
     [userId, ticket.mode, ticket.amount]
@@ -124,9 +124,9 @@ export async function submitVerifiedScore(
   );
 
   const best = Math.max(wpm, previousBest.best ?? 0);
-  const ahead = await queryOne<RowDataPacket & { n: number }>(
+  const ahead = await queryOne<QueryResultRow & { n: number }>(
     db,
-      `SELECT COUNT(*) AS n FROM (
+      `SELECT COUNT(*)::INTEGER AS n FROM (
          SELECT user_id, MAX(wpm) AS best FROM scores
           WHERE mode = ? AND amount = ? GROUP BY user_id
        ) AS score_bests WHERE best > ?`,
@@ -148,7 +148,7 @@ export async function getLeaderboard(
 ): Promise<LeaderboardRow[]> {
   const rows = await queryRows<LeaderboardRow>(
     getDb(),
-      `SELECT username, wpm, accuracy, consistency, created_at AS createdAt FROM (
+      `SELECT username, wpm, accuracy, consistency, created_at AS "createdAt" FROM (
          SELECT u.username AS username, s.wpm AS wpm, s.accuracy AS accuracy,
                 s.consistency AS consistency, s.created_at AS created_at,
                 ROW_NUMBER() OVER (
@@ -174,7 +174,7 @@ export async function getLeaderboard(
  */
 async function raceRecordMap(kind: "duo" | "multi"): Promise<Map<string, { wins: number; losses: number; draws: number }>> {
   const rows = await queryRows<
-    RowDataPacket & {
+    QueryResultRow & {
       raceId: string;
       username: string;
       finishedAt: number | null;
@@ -183,7 +183,7 @@ async function raceRecordMap(kind: "duo" | "multi"): Promise<Map<string, { wins:
     }
   >(
     getDb(),
-      `SELECT p.race_id AS raceId, u.username AS username, p.finished_at AS finishedAt,
+      `SELECT p.race_id AS "raceId", u.username AS username, p.finished_at AS "finishedAt",
               p.wpm AS wpm, p.accuracy AS accuracy
          FROM race_players p
          JOIN races r ON r.id = p.race_id

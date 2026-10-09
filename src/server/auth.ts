@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { execute, getDb, queryOne } from "./db";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 
 const scrypt = promisify(scryptCallback) as (
   password: string,
@@ -95,7 +95,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const row = await queryOne<RowDataPacket & { id: number; username: string }>(
+  const row = await queryOne<QueryResultRow & { id: number; username: string }>(
     getDb(),
       `SELECT u.id AS id, u.username AS username
          FROM sessions s JOIN users u ON u.id = s.user_id
@@ -107,9 +107,9 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
 });
 
 export async function findUserByUsername(username: string): Promise<SessionUser | null> {
-  const row = await queryOne<RowDataPacket & SessionUser>(
+  const row = await queryOne<QueryResultRow & SessionUser>(
     getDb(),
-    "SELECT id, username FROM users WHERE username = ?",
+    "SELECT id, username FROM users WHERE LOWER(username) = LOWER(?)",
     [username]
   );
   return row ? { id: row.id, username: row.username } : null;

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { execute, getDb, queryOne, queryRows, transaction } from "./db";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 import { MAX_CHARS_PER_SECOND, MAX_PLAUSIBLE_WPM, wholeNumber } from "./scores";
 import { parseTypedLog, verifyLog } from "./verify";
 import { generateWords } from "@/lib/words";
@@ -35,7 +35,7 @@ const EARLY_FINISH_TOLERANCE_MS = 1500;
 
 const ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 
-interface RaceRow extends RowDataPacket {
+interface RaceRow extends QueryResultRow {
   id: string;
   creator_id: number;
   kind: RaceKind;
@@ -51,7 +51,7 @@ interface RaceRow extends RowDataPacket {
   rematch_id: string | null;
 }
 
-interface PlayerRow extends RowDataPacket {
+interface PlayerRow extends QueryResultRow {
   user_id: number;
   username: string;
   correct_chars: number;
@@ -129,7 +129,7 @@ async function insertRace(
   words: string[]
 ): Promise<void> {
   const db = getDb();
-  await queryOne<RowDataPacket & { id: number }>(db, "SELECT id FROM users WHERE id = ? FOR UPDATE", [creatorId]);
+  await queryOne<QueryResultRow & { id: number }>(db, "SELECT id FROM users WHERE id = ? FOR UPDATE", [creatorId]);
   // One open lobby at a time: a new race replaces any the host left unstarted.
   await execute(
     db,
@@ -168,7 +168,7 @@ export async function createRace(
         typeof error !== "object" ||
         error === null ||
         !("code" in error) ||
-        error.code !== "ER_DUP_ENTRY"
+        error.code !== "23505"
       ) {
         throw error;
       }
@@ -309,7 +309,7 @@ export async function getRaceView(
 
   const usernameOf = async (id: number | null): Promise<string | null> => {
     if (id === null) return null;
-    const row = await queryOne<RowDataPacket & { username: string }>(
+    const row = await queryOne<QueryResultRow & { username: string }>(
       getDb(),
       "SELECT username FROM users WHERE id = ?",
       [id]
@@ -406,10 +406,10 @@ export interface PendingInvite {
 /** Challenges sent to this player that they have not answered and that are still open. */
 export async function getPendingInvites(userId: number, now = Date.now()): Promise<PendingInvite[]> {
   const rows = await queryRows<
-    RowDataPacket & Omit<PendingInvite, "from"> & { fromUsername: string }
+    QueryResultRow & Omit<PendingInvite, "from"> & { fromUsername: string }
   >(
     getDb(),
-      `SELECT r.id AS raceId, u.username AS fromUsername, r.mode AS mode, r.amount AS amount, r.created_at AS createdAt
+      `SELECT r.id AS "raceId", u.username AS "fromUsername", r.mode AS mode, r.amount AS amount, r.created_at AS "createdAt"
          FROM races r JOIN users u ON u.id = r.creator_id
         WHERE r.invited_user_id = ? AND r.start_at IS NULL AND r.cancelled = 0
           AND r.finished_at IS NULL AND r.created_at > ?

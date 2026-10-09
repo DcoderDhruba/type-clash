@@ -30,13 +30,13 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 - **Rematch:** the results screen has a **Rematch** button. For a challenge it goes to the other player; for a race it opens a new lobby, and the other players get a "Join rematch" button on their results screen.
 - **Races** (multiplayer): create a race and share its link. Anyone who opens the link and joins is in, up to 8 players. Every player except the host clicks **Ready**; the host can press **Start race** once at least 2 players are in and everyone is ready. After a 5-second countdown everyone types the same words at the same time, and everyone gets a place: higher WPM wins, ties go to accuracy, equal results share a place. Nobody can join after the start, and a player who never reports a result forfeits. Players also get a random funny message and icon based on where they finish, plus a live one during the race. The messages are in `src/lib/funnyMessages.ts`, which is plain data meant to be edited: add a line to any list to add a message.
 
-## MySQL setup
+## Supabase Postgres setup
 
-The app stores accounts, sessions, scores, tickets, races and race players in MySQL. Copy `.env.example` to `.env.local` and set `MYSQL_PASSWORD` to the password for your Aiven database. The supplied host, port, database name and username are already filled in. `.env.local` is git-ignored; never commit database credentials.
+The app stores accounts, sessions, scores, tickets, races and race players in Supabase Postgres. Copy `.env.example` to `.env.local` and set `DATABASE_URL` to the PostgreSQL connection string from Supabase **Project Settings → Database → Connection string**. Use the **Transaction pooler** connection string for Vercel deployments, especially when direct database connections are unavailable over IPv6. `.env.local` is git-ignored; never commit a database connection string or password.
 
-TLS certificate verification is enabled for MySQL connections. Download the CA certificate from the Aiven console and set `MYSQL_SSL_CA` in `.env.local` to the certificate file's path. In Vercel, set `MYSQL_SSL_CA` to the full PEM certificate contents (including the `BEGIN CERTIFICATE` and `END CERTIFICATE` lines). This is required to verify Aiven's certificate chain; do not disable certificate verification. The app creates its tables automatically when it first connects.
+TLS certificate verification is enabled. Supabase's normal connection string uses TLS with the system certificate store. If your project requires its root certificate, set `PGSSLROOTCERT` to the CA certificate path locally or its full PEM contents in Vercel. Do not disable certificate verification. The app creates the required tables and indexes automatically when it first connects; the Supabase database user must have permission to create them.
 
-The existing SQLite files in `data/` are left untouched and are not imported. Existing accounts and results in those files will not appear in MySQL; new data is stored in MySQL after the environment variables are configured.
+The previous MySQL and SQLite databases are left untouched and are not imported. Existing accounts and results in those databases will not appear in Supabase; new data is stored in Postgres once `DATABASE_URL` is configured.
 
 ## Search engine setup
 
@@ -44,7 +44,7 @@ Set `SITE_URL` in Vercel to the canonical public URL of the deployed site, then 
 
 Things to know before deploying:
 
-- Set all five `MYSQL_*` connection variables in the deployment environment. Keep the password and any CA certificate out of source control.
+- Set `DATABASE_URL` in the deployment environment. Keep the connection string and any CA certificate out of source control.
 - Race state is in the database, but login throttling is in memory, so it is per server process.
 - **Score checking.** A logged-in player's test is registered with the server at the first key (a one-time "ticket" that records the test's random seed and the server's clock). The words come from that seed, so the server can rebuild them itself. At the end the browser sends the full typing log (every word and when each key was pressed) and the server recounts the score from it, ignoring any number the browser claims. It rejects logs that were pasted, faster than a person can press keys, too regular to be a person, or that do not match how long the test really took. Race results are checked the same way against the race's own words and start time.
 - **What this cannot stop.** A program that types the right words at a believable speed with human-like timing will still pass; nothing running in a browser can fully prevent that. The limits are in `src/server/verify.ts` if you want to tighten or loosen them.

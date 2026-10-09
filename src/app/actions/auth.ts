@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { execute, getDb, queryOne } from "@/server/db";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 import {
   PASSWORD_MAX,
   PASSWORD_MIN,
@@ -48,10 +48,10 @@ export async function signup(_prev: AuthFormState | undefined, formData: FormDat
 
   const db = getDb();
   const taken = async (): Promise<AuthFormState | null> => {
-    if (await queryOne<RowDataPacket>(db, "SELECT 1 FROM users WHERE email = ?", [email])) {
+    if (await queryOne<QueryResultRow>(db, "SELECT 1 FROM users WHERE email = ?", [email])) {
       return { field: "email", error: "An account with this email already exists. Try logging in." };
     }
-    if (await queryOne<RowDataPacket>(db, "SELECT 1 FROM users WHERE username = ?", [username])) {
+    if (await queryOne<QueryResultRow>(db, "SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)", [username])) {
       return { field: "username", error: "That username is already taken." };
     }
     return null;
@@ -65,12 +65,12 @@ export async function signup(_prev: AuthFormState | undefined, formData: FormDat
     // email_verified stays 0 until a verification email is sent and confirmed.
     const result = await execute(
       db,
-      "INSERT INTO users (username, password_hash, created_at, email, email_verified) VALUES (?, ?, ?, ?, 0)",
+      "INSERT INTO users (username, password_hash, created_at, email, email_verified) VALUES (?, ?, ?, ?, 0) RETURNING id",
       [username, await hashPassword(password), Date.now(), email]
     );
     userId = result.insertId;
   } catch (error) {
-    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ER_DUP_ENTRY") {
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "23505") {
       throw error;
     }
     // Lost a race with another signup for the same email or username.
@@ -95,9 +95,11 @@ export async function login(_prev: AuthFormState | undefined, formData: FormData
   const db = getDb();
   const email = identifier.includes("@") ? normalizeEmail(identifier) : null;
   const user = email || !identifier.includes("@")
-    ? await queryOne<RowDataPacket & { id: number; password_hash: string }>(
+    ? await queryOne<QueryResultRow & { id: number; password_hash: string }>(
         db,
-        identifier.includes("@") ? "SELECT id, password_hash FROM users WHERE email = ?" : "SELECT id, password_hash FROM users WHERE username = ?",
+        identifier.includes("@")
+          ? "SELECT id, password_hash FROM users WHERE email = ?"
+          : "SELECT id, password_hash FROM users WHERE LOWER(username) = LOWER(?)",
         [identifier.includes("@") ? email : identifier]
       )
     : undefined;
