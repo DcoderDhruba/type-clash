@@ -11,7 +11,11 @@ import type { RaceRecord } from "@/server/scores";
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }) {
   const { username } = await params;
-  return { title: `${username} | TypeChaze` };
+  return {
+    title: `${username}'s Typing Stats`,
+    description: `View ${username}'s typing speed, personal bests, test history, and race record on TypeChaze.`,
+    alternates: { canonical: `/profile/${encodeURIComponent(username)}` },
+  };
 }
 
 const typeLabel = (mode: string, amount: number) => (mode === "time" ? `${amount} seconds` : `${amount} words`);

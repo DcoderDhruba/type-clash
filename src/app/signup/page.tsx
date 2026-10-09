@@ -2,7 +2,10 @@ import { redirect } from "next/navigation";
 import { AuthForm } from "@/components/AuthForm";
 import { getCurrentUser, safeNextPath } from "@/server/auth";
 
-export const metadata = { title: "Sign up | TypeChaze" };
+export const metadata = {
+  title: "Sign Up",
+  robots: { index: false, follow: true },
+};
 
 export default async function SignupPage({
   searchParams,

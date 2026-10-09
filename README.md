@@ -38,6 +38,10 @@ TLS certificate verification is enabled for MySQL connections. Download the CA c
 
 The existing SQLite files in `data/` are left untouched and are not imported. Existing accounts and results in those files will not appear in MySQL; new data is stored in MySQL after the environment variables are configured.
 
+## Search engine setup
+
+Set `SITE_URL` in Vercel to the canonical public URL of the deployed site, then redeploy. The app publishes `/robots.txt` and `/sitemap.xml` containing the home page, leaderboard and challenge page; the sitemap is available even if the database is temporarily offline. Public player profiles are linked from the leaderboard. Submit `https://your-domain.com/sitemap.xml` to Google Search Console and Bing Webmaster Tools to request crawling. Search engines control indexing and rankings, which may take time and are not guaranteed.
+
 Things to know before deploying:
 
 - Set all five `MYSQL_*` connection variables in the deployment environment. Keep the password and any CA certificate out of source control.

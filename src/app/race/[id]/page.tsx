@@ -3,7 +3,10 @@ import { RaceRoom } from "@/components/RaceRoom";
 import { getCurrentUser } from "@/server/auth";
 import { getRaceView } from "@/server/races";
 
-export const metadata = { title: "Race | TypeChaze" };
+export const metadata = {
+  title: "Typing Race",
+  robots: { index: false, follow: false },
+};
 
 export default async function RacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
