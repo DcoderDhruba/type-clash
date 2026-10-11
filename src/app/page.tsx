@@ -2,7 +2,7 @@ import { TypingTest } from "@/components/TypingTest";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Free Online Typing Speed Test",
+  title: { absolute: "TypeChaze | Free Online Typing Speed Test" },
   description:
     "Test your typing speed for free. Measure words per minute and accuracy, improve your score, and race friends in real time.",
   alternates: { canonical: "/" },
