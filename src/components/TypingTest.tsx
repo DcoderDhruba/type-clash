@@ -29,7 +29,7 @@ function registerTest(seed: string, config: TypingTestConfig): Promise<string | 
     .catch(() => null);
 }
 
-export function TypingTest() {
+export function TypingTest({ initialOverrides }: { initialOverrides?: Partial<TypingTestConfig> }) {
   const {
     config,
     words,
@@ -45,7 +45,7 @@ export function TypingTest() {
     goBack,
     restart,
     repeat,
-  } = useTypingTest();
+  } = useTypingTest({ initialOverrides });
 
   const { inputRef, focused, focusInput, clearInput, inputProps } = useTypingInput({
     onInput: handleInputChange,

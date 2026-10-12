@@ -1,7 +1,7 @@
 import { getDb, queryOne, queryRows } from "./db";
 import { getPlayerRaceRecord } from "./scores";
 import type { RaceRecord } from "./scores";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 
 export interface BestScore {
   mode: "time" | "words";
@@ -41,23 +41,25 @@ export interface Profile {
 /** Everything shown on a public profile. Never includes the email. */
 export async function getProfile(username: string): Promise<Profile | null> {
   const db = getDb();
-  const user = await queryOne<RowDataPacket & { id: number; username: string; createdAt: number }>(
+  const user = await queryOne<QueryResultRow & { id: number; username: string; createdAt: number }>(
     db,
-    "SELECT id, username, created_at AS createdAt FROM users WHERE username = ?",
+    'SELECT id, username, created_at AS "createdAt" FROM users WHERE LOWER(username) = LOWER(?)',
     [username]
   );
   if (!user) return null;
 
-  const totals = await queryOne<RowDataPacket & { tests: number; avgWpm: number | null; avgAccuracy: number | null }>(
+  const totals = await queryOne<
+    QueryResultRow & { tests: number; avgWpm: number | null; avgAccuracy: number | null }
+  >(
     db,
-    "SELECT COUNT(*) AS tests, AVG(wpm) AS avgWpm, AVG(accuracy) AS avgAccuracy FROM scores WHERE user_id = ?",
+    'SELECT COUNT(*)::INTEGER AS tests, AVG(wpm)::DOUBLE PRECISION AS "avgWpm", AVG(accuracy)::DOUBLE PRECISION AS "avgAccuracy" FROM scores WHERE user_id = ?',
     [user.id]
   );
   if (!totals) throw new Error("Could not calculate the player's profile totals.");
 
-  const bests = await queryRows<BestScore & RowDataPacket>(
+  const bests = await queryRows<BestScore & QueryResultRow>(
     db,
-      `SELECT mode, amount, wpm, accuracy, created_at AS createdAt FROM (
+      `SELECT mode, amount, wpm, accuracy, created_at AS "createdAt" FROM (
          SELECT mode, amount, wpm, accuracy, created_at,
                 ROW_NUMBER() OVER (PARTITION BY mode, amount ORDER BY wpm DESC, accuracy DESC, created_at ASC) AS rn
            FROM scores WHERE user_id = ?
@@ -66,9 +68,9 @@ export async function getProfile(username: string): Promise<Profile | null> {
     [user.id]
   );
 
-  const recent = await queryRows<RecentScore & RowDataPacket>(
+  const recent = await queryRows<RecentScore & QueryResultRow>(
     db,
-    "SELECT mode, amount, wpm, accuracy, created_at AS createdAt FROM scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 8",
+    'SELECT mode, amount, wpm, accuracy, created_at AS "createdAt" FROM scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 8',
     [user.id]
   );
   const [races, challenges] = await Promise.all([
@@ -97,9 +99,9 @@ export async function getScoreHistory(
   amount: number,
   limit = 50
 ): Promise<HistoryPoint[]> {
-  const rows = await queryRows<HistoryPoint & RowDataPacket>(
+  const rows = await queryRows<HistoryPoint & QueryResultRow>(
     getDb(),
-    "SELECT wpm, created_at AS createdAt FROM scores WHERE user_id = ? AND mode = ? AND amount = ? ORDER BY created_at DESC LIMIT ?",
+    'SELECT wpm, created_at AS "createdAt" FROM scores WHERE user_id = ? AND mode = ? AND amount = ? ORDER BY created_at DESC LIMIT ?',
     [userId, mode, amount, limit]
   );
   return rows.reverse();

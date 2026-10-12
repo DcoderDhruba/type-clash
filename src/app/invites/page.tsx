@@ -4,7 +4,10 @@ import { PageShell } from "@/components/PageShell";
 import { getCurrentUser } from "@/server/auth";
 import { getPendingInvites } from "@/server/races";
 
-export const metadata = { title: "Challenges | TypeChaze" };
+export const metadata = {
+  title: "Your Challenges",
+  robots: { index: false, follow: false },
+};
 
 export default async function InvitesPage() {
   const user = await getCurrentUser();

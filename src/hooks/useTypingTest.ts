@@ -61,9 +61,11 @@ export interface UseTypingTestOptions {
   fixed?: { words: string[]; config: TypingTestConfig };
   /** Wait for begin() to start the clock instead of starting on the first keystroke. */
   manualStart?: boolean;
+  /** Settings from a link, which take precedence over saved settings on initial load. */
+  initialOverrides?: Partial<TypingTestConfig>;
 }
 
-export function useTypingTest({ fixed, manualStart = false }: UseTypingTestOptions = {}) {
+export function useTypingTest({ fixed, manualStart = false, initialOverrides }: UseTypingTestOptions = {}) {
   const isFixed = fixed !== undefined;
   const [config, setConfig] = useState<TypingTestConfig>(fixed?.config ?? DEFAULT_CONFIG);
   const [words, setWords] = useState<string[]>(fixed?.words ?? []);
@@ -264,7 +266,7 @@ export function useTypingTest({ fixed, manualStart = false }: UseTypingTestOptio
 
   useEffect(() => {
     if (isFixed) return;
-    const initial = loadSavedConfig() ?? configRef.current;
+    const initial = { ...(loadSavedConfig() ?? configRef.current), ...initialOverrides };
     setConfig(initial);
     setWords(startWords(initial));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -310,4 +312,3 @@ export function useTypingTest({ fixed, manualStart = false }: UseTypingTestOptio
 }
 
 export type { Mode };
-

@@ -3,7 +3,11 @@ import { ChallengeForm } from "@/components/ChallengeForm";
 import { isValidAmount } from "@/lib/config";
 import { findUserByUsername, getCurrentUser } from "@/server/auth";
 
-export const metadata = { title: "Challenge | TypeChaze" };
+export const metadata = {
+  title: "Typing Races and Challenges",
+  description: "Challenge a friend to a real-time typing speed duel or start a multiplayer typing race.",
+  alternates: { canonical: "/challenge" },
+};
 
 export default async function ChallengePage({
   searchParams,
