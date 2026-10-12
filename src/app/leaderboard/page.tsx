@@ -1,4 +1,4 @@
-import Link from "next/link";
+ import Link from "next/link";
 import { FilterButton } from "@/components/FilterButton";
 import { PageShell } from "@/components/PageShell";
 import { PlaceIcon } from "@/components/PlaceIcon";
@@ -113,7 +113,11 @@ export default async function LeaderboardPage({
                   : "No scores yet. Be the first on the board!"}
             </p>
             <Link
-              href={isRecords ? `/challenge?type=${board === "races" ? "race" : "challenge"}` : "/"}
+              href={
+                isRecords
+                  ? `/challenge?type=${board === "races" ? "race" : "challenge"}`
+                  : `/?mode=${board}&amount=${amount}`
+              }
               className="text-accent hover:underline"
             >
               {board === "races" ? "Start a race" : board === "challenges" ? "Challenge someone" : "Take a test"}
