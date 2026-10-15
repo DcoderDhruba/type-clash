@@ -104,14 +104,15 @@ export function RaceRoom({ initial }: { initial: RaceView }) {
       const sentAt = Date.now();
 
       try {
-        const response =
-          raceOn && !done && !finishSentRef.current
+        const response = needWords
+          ? await fetch(`${url}?words=1`, { cache: "no-store" })
+          : raceOn && !done && !finishSentRef.current
             ? await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action: "progress", ...progressRef.current }),
               })
-            : await fetch(needWords ? `${url}?words=1` : url, { cache: "no-store" });
+            : await fetch(url, { cache: "no-store" });
 
         if (response.status === 401) {
           router.push(`/login?next=${encodeURIComponent(`/race/${initial.id}`)}`);
