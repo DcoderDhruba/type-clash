@@ -1,4 +1,4 @@
-import Link from "next/link";
+ import Link from "next/link";
 import { FilterButton } from "@/components/FilterButton";
 import { PageShell } from "@/components/PageShell";
 import { PlaceIcon } from "@/components/PlaceIcon";
@@ -6,7 +6,11 @@ import { TIME_OPTIONS, WORD_OPTIONS, isValidAmount } from "@/lib/config";
 import { getCurrentUser } from "@/server/auth";
 import { getLeaderboard, getRaceRecords } from "@/server/scores";
 
-export const metadata = { title: "Leaderboard | TypeChaze" };
+export const metadata = {
+  title: "Typing Speed Leaderboard",
+  description: "Compare typing speed test scores, WPM, accuracy, race wins, and challenge records on the TypeChaze leaderboard.",
+  alternates: { canonical: "/leaderboard" },
+};
 
 type Board = "time" | "words" | "races" | "challenges";
 
@@ -109,7 +113,11 @@ export default async function LeaderboardPage({
                   : "No scores yet. Be the first on the board!"}
             </p>
             <Link
-              href={isRecords ? `/challenge?type=${board === "races" ? "race" : "challenge"}` : "/"}
+              href={
+                isRecords
+                  ? `/challenge?type=${board === "races" ? "race" : "challenge"}`
+                  : `/?mode=${board}&amount=${amount}`
+              }
               className="text-accent hover:underline"
             >
               {board === "races" ? "Start a race" : board === "challenges" ? "Challenge someone" : "Take a test"}

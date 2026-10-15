@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { execute, getDb, queryOne } from "./db";
-import type { RowDataPacket } from "mysql2/promise";
+import type { QueryResultRow } from "pg";
 
 /**
  * A ticket is registered when a logged-in player types the first key of a test. It fixes the words
@@ -22,7 +22,7 @@ export interface Ticket {
   startedAt: number;
 }
 
-interface TicketRow extends RowDataPacket {
+interface TicketRow extends QueryResultRow {
   id: string;
   user_id: number;
   seed: string;
