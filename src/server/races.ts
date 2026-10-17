@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { execute, getDb, queryOne, queryRows, transaction } from "./db";
 import type { QueryResultRow } from "pg";
-import { MAX_CHARS_PER_SECOND, MAX_PLAUSIBLE_WPM, wholeNumber } from "./scores";
+import { wholeNumber } from "./scores";
 import { parseTypedLog, verifyLog } from "./verify";
 import { generateWords } from "@/lib/words";
 import { calcAccuracy, calcRawWpm, calcWpm } from "@/lib/scoring";
@@ -32,6 +32,9 @@ const WAITING_EXPIRY_MS = 6 * 60 * 60 * 1000;
 const INVITE_EXPIRY_MS = 30 * 60 * 1000;
 /** Allowance for clock differences when checking that a timed race really lasted its full time. */
 const EARLY_FINISH_TOLERANCE_MS = 1500;
+const MAX_RACE_WPM = 250;
+const MAX_RACE_CHARS_PER_SECOND = (MAX_RACE_WPM * 5) / 60;
+const PROGRESS_JITTER_MS = 500;
 
 const ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 
@@ -540,28 +543,62 @@ export function parseFinish(body: Record<string, unknown>): TypedLog | null {
 
 /** Records a player's live progress. Silently ignores anything that is not a running race or not humanly possible. */
 export async function reportProgress(raceId: string, userId: number, progress: RaceProgress): Promise<void> {
-  const race = await loadRace(raceId);
-  const now = Date.now();
-  if (!race || race.start_at === null || race.finished_at !== null || now < race.start_at) return;
+  await transaction(async () => {
+    const race = await loadRace(raceId);
+    const now = Date.now();
+    if (!race || race.start_at === null || race.finished_at !== null || now < race.start_at) return;
 
-  const elapsedSeconds = (now - race.start_at) / 1000;
-  const words = JSON.parse(race.words) as string[];
-  const ceiling = Math.min(totalChars(words), (elapsedSeconds + 2) * MAX_CHARS_PER_SECOND);
-  if (progress.correctChars > ceiling || progress.wordsDone > words.length) return;
+    const player = await queryOne<
+      QueryResultRow & {
+        correct_chars: number;
+        typed_chars: number;
+        words_done: number;
+        progress_at: number | null;
+        finished_at: number | null;
+      }
+    >(
+      getDb(),
+      `SELECT correct_chars, typed_chars, words_done, progress_at, finished_at
+         FROM race_players
+        WHERE race_id = ? AND user_id = ?
+        FOR UPDATE`,
+      [raceId, userId]
+    );
+    if (!player || player.finished_at !== null || progress.typedChars < progress.correctChars) return;
 
-  await execute(
-    getDb(),
+    const words = JSON.parse(race.words) as string[];
+    const elapsedSeconds = (now - race.start_at) / 1000;
+    const ceiling = Math.min(totalChars(words), (elapsedSeconds + 2) * MAX_RACE_CHARS_PER_SECOND);
+    const previousAt = player.progress_at ?? race.start_at;
+    const elapsedSinceProgress = Math.max(0, now - previousAt);
+    const allowedIncrease = Math.floor(
+      ((elapsedSinceProgress + PROGRESS_JITTER_MS) / 1000) * MAX_RACE_CHARS_PER_SECOND
+    );
+
+    if (
+      progress.correctChars > ceiling ||
+      progress.wordsDone > words.length ||
+      progress.correctChars - player.correct_chars > allowedIncrease ||
+      progress.typedChars - player.typed_chars > allowedIncrease ||
+      progress.wordsDone - player.words_done > Math.floor(allowedIncrease / 2)
+    ) {
+      return;
+    }
+
+    await execute(
+      getDb(),
       `UPDATE race_players
-          SET correct_chars = ?, typed_chars = ?, words_done = ?
+          SET correct_chars = ?, typed_chars = ?, words_done = ?, progress_at = ?
         WHERE race_id = ? AND user_id = ? AND finished_at IS NULL`,
-    [progress.correctChars, Math.max(progress.typedChars, progress.correctChars), progress.wordsDone, raceId, userId]
-  );
+      [progress.correctChars, progress.typedChars, progress.wordsDone, now, raceId, userId]
+    );
+  });
 }
 
 /**
  * Records a player's final result and, if that ends the race, settles the places.
- * The result is recounted from the typing log against the race's own words and the server's clock;
- * nothing the player claims about their own score is used.
+ * The result is recounted from the typing log against the race's own words; nothing the player
+ * claims about their own score is used.
  */
 export function finishRace(
   raceId: string,
@@ -599,14 +636,19 @@ export function finishRace(
       }
       elapsedSeconds = race.amount;
     } else {
-      elapsedSeconds = Math.max(1, wallMs / 1000);
+      elapsedSeconds = Math.max(0.001, verdict.durationMs / 1000);
       if (log.typedWords.length + (log.finalInput ? 1 : 0) < race.amount) {
         return { error: "invalid" as const, reason: "Not all of the words were typed." };
       }
     }
 
     const wpm = calcWpm(correct, elapsedSeconds);
-    if (wpm > MAX_PLAUSIBLE_WPM || correct > (elapsedSeconds + 2) * MAX_CHARS_PER_SECOND) {
+    const rawWpm = calcRawWpm(typed, elapsedSeconds);
+    if (
+      wpm > MAX_RACE_WPM ||
+      rawWpm > MAX_RACE_WPM ||
+      correct > (elapsedSeconds + 2) * MAX_RACE_CHARS_PER_SECOND
+    ) {
       return { error: "invalid" as const, reason: "That speed is not humanly possible." };
     }
 
@@ -620,7 +662,7 @@ export function finishRace(
       [
         now,
         wpm,
-        calcRawWpm(typed, elapsedSeconds),
+        rawWpm,
         calcAccuracy(correct, typed),
         correct,
         incorrect,

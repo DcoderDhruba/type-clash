@@ -11,9 +11,9 @@ import type { TypedLog } from "@/lib/types";
 export const MAX_PLAUSIBLE_WPM = 350;
 export const MAX_CHARS_PER_SECOND = (MAX_PLAUSIBLE_WPM * 5) / 60;
 
-/** How far the log's length may differ from the real time the server saw pass. */
-const TIMING_EARLY_MS = 4000;
-const TIMING_LATE_MS = 8000;
+/** Allow for the start-ticket and score-submission requests to be delayed by the network. */
+const TIMING_EARLY_MS = 15_000;
+const TIMING_LATE_MS = 15_000;
 
 export interface SavedScore {
   wpm: number;

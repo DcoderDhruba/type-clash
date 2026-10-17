@@ -61,6 +61,7 @@ const SCHEMA = [
     correct_chars INTEGER NOT NULL DEFAULT 0,
     typed_chars INTEGER NOT NULL DEFAULT 0,
     words_done INTEGER NOT NULL DEFAULT 0,
+    progress_at BIGINT,
     finished_at BIGINT,
     wpm INTEGER,
     raw_wpm INTEGER,
@@ -71,6 +72,7 @@ const SCHEMA = [
     missed INTEGER,
     PRIMARY KEY (race_id, user_id)
   )`,
+  "ALTER TABLE race_players ADD COLUMN IF NOT EXISTS progress_at BIGINT",
   "CREATE INDEX IF NOT EXISTS race_players_order ON race_players(race_id, id)",
   "CREATE INDEX IF NOT EXISTS race_players_user ON race_players(user_id)",
   `CREATE TABLE IF NOT EXISTS test_tickets (
